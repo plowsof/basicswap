@@ -2241,6 +2241,20 @@ def ensure_coin_valid(coin_name: str, test_disabled: bool = True) -> None:
 
 def main():
     global use_tor_proxy, with_coins_changed
+    
+    for v in sys.argv[1:]:
+        if len(v) < 2 or v[0] != "-":
+            exitWithError("Unknown argument {}".format(v))
+
+        s = v.split("=")
+        name = s[0].strip()
+
+        for i in range(2):
+            if name[0] == "-":
+                name = name[1:]
+        if name == "upgradecores":
+            upgrade_cores = True
+            return 0
     setTorrcVars()
     data_dir = None
     bin_dir = None
@@ -2300,6 +2314,7 @@ def main():
             continue
         if name == "upgradecores":
             upgrade_cores = True
+            return 0
             continue
         if name == "nocores":
             no_cores = True
@@ -2411,726 +2426,1451 @@ def main():
             exitWithError("Unknown argument {}".format(v))
         exitWithError("Unknown argument {}".format(v))
 
-    if print_versions:
-        printVersion(with_coins)
-        return 0
-
-    if data_dir is None:
-        data_dir = os.path.join(os.path.expanduser(cfg.BASICSWAP_DATADIR))
-    if bin_dir is None:
-        bin_dir = os.path.join(data_dir, "bin")
-
-    logger.info(f"BasicSwap prepare script {__version__}\n")
-    logger.info(f"Python version: {platform.python_version()}")
-    logger.info(f"Data dir: {data_dir}")
-    logger.info(f"Bin dir: {bin_dir}")
-    logger.info(f"Chain: {chain}")
-    logger.info(
-        "WALLET_ENCRYPTION_PWD is {}set".format(
-            "not " if WALLET_ENCRYPTION_PWD == "" else ""
-        )
-    )
-
-    if port_offset is None:
-        port_offset = 300 if chain == "testnet" else 0
-
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-    config_path = os.path.join(data_dir, cfg.CONFIG_FILENAME)
-
-    config_exists = os.path.exists(config_path)
-    if config_exists and (
-        client_auth_pwd_value is not None or disable_client_auth_flag
-    ):
-        try:
-            settings = load_config(config_path)
-            modified = False
-            if client_auth_pwd_value is not None:
-                settings["client_auth_hash"] = rfc2440_hash_password(
-                    client_auth_pwd_value
-                )
-                logger.info("Client authentication password updated.")
-                modified = True
-            elif disable_client_auth_flag:
-                if "client_auth_hash" in settings:
-                    del settings["client_auth_hash"]
-                    logger.info("Client authentication disabled.")
-                    modified = True
-                else:
-                    logger.info("Client authentication is already disabled.")
-
-            if modified:
-                with open(config_path, "w") as fp:
-                    json.dump(settings, fp, indent=4)
+    if upgrade_cores == False:
+        if print_versions:
+            printVersion(with_coins)
             return 0
-        except Exception as e:
-            exitWithError(f"Failed to update client auth settings: {e}")
 
-    if use_tor_proxy and extra_opts.get("no_tor_proxy", False):
-        exitWithError("Can't use --usetorproxy and --notorproxy together")
+        if data_dir is None:
+            data_dir = os.path.join(os.path.expanduser(cfg.BASICSWAP_DATADIR))
+        if bin_dir is None:
+            bin_dir = os.path.join(data_dir, "bin")
 
-    # Automatically enable usetorproxy for certain commands if it's set in basicswap config
-    if (
-        not (initwalletsonly or enable_tor or disable_tor or disable_coin)
-        and not use_tor_proxy
-        and os.path.exists(config_path)
-    ):
-        settings = load_config(config_path)
-        settings_use_tor = settings.get("use_tor", False)
-        if settings_use_tor:
-            logger.info("use_tor is set in the config")
-            if extra_opts.get("no_tor_proxy", False):
-                use_tor_proxy = False
-                logger.warning(
-                    "Not automatically setting --usetorproxy as --notorproxy is set"
-                )
-            else:
-                use_tor_proxy = True
-                logger.info("Automatically setting --usetorproxy")
+        logger.info(f"BasicSwap prepare script {__version__}\n")
+        logger.info(f"Python version: {platform.python_version()}")
+        logger.info(f"Data dir: {data_dir}")
+        logger.info(f"Bin dir: {bin_dir}")
+        logger.info(f"Chain: {chain}")
+        logger.info(
+            "WALLET_ENCRYPTION_PWD is {}set".format(
+                "not " if WALLET_ENCRYPTION_PWD == "" else ""
+            )
+        )
 
-    setConnectionParameters(allow_set_tor=False)
+        if port_offset is None:
+            port_offset = 300 if chain == "testnet" else 0
 
-    if use_tor_proxy and TEST_TOR_PROXY:
-        testTorConnection()
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir)
+        config_path = os.path.join(data_dir, cfg.CONFIG_FILENAME)
 
-    if use_tor_proxy and TEST_ONION_LINK:
-        testOnionLink()
+        config_exists = os.path.exists(config_path)
+        if config_exists and (
+            client_auth_pwd_value is not None or disable_client_auth_flag
+        ):
+            try:
+                settings = load_config(config_path)
+                modified = False
+                if client_auth_pwd_value is not None:
+                    settings["client_auth_hash"] = rfc2440_hash_password(
+                        client_auth_pwd_value
+                    )
+                    logger.info("Client authentication password updated.")
+                    modified = True
+                elif disable_client_auth_flag:
+                    if "client_auth_hash" in settings:
+                        del settings["client_auth_hash"]
+                        logger.info("Client authentication disabled.")
+                        modified = True
+                    else:
+                        logger.info("Client authentication is already disabled.")
 
-    should_download_btc_fastsync = False
-    if extra_opts.get("use_btc_fastsync", False) is True:
-        if "bitcoin" in with_coins or add_coin == "bitcoin":
-            should_download_btc_fastsync = True
-        else:
-            logger.warning("Ignoring usebtcfastsync option without Bitcoin selected.")
+                if modified:
+                    with open(config_path, "w") as fp:
+                        json.dump(settings, fp, indent=4)
+                return 0
+            except Exception as e:
+                exitWithError(f"Failed to update client auth settings: {e}")
 
-    if should_download_btc_fastsync:
-        logger.info(f"Preparing BTC Fastsync file {BITCOIN_FASTSYNC_FILE}")
-        sync_file_path = os.path.join(data_dir, BITCOIN_FASTSYNC_FILE)
-        sync_file_url = os.path.join(BITCOIN_FASTSYNC_URL, BITCOIN_FASTSYNC_FILE)
-        try:
-            check_btc_fastsync = extra_opts.get("check_btc_fastsync", True)
-            check_sig = False
-            if not os.path.exists(sync_file_path):
-                downloadFile(sync_file_url, sync_file_path, timeout=50)
-                check_sig = check_btc_fastsync
-            elif check_btc_fastsync:
-                file_size = os.stat(sync_file_path).st_size
-                remote_file_length, can_resume = getRemoteFileLength(sync_file_url)
-                if file_size < remote_file_length:
+        if use_tor_proxy and extra_opts.get("no_tor_proxy", False):
+            exitWithError("Can't use --usetorproxy and --notorproxy together")
+
+        # Automatically enable usetorproxy for certain commands if it's set in basicswap config
+        if (
+            not (initwalletsonly or enable_tor or disable_tor or disable_coin)
+            and not use_tor_proxy
+            and os.path.exists(config_path)
+        ):
+            settings = load_config(config_path)
+            settings_use_tor = settings.get("use_tor", False)
+            if settings_use_tor:
+                logger.info("use_tor is set in the config")
+                if extra_opts.get("no_tor_proxy", False):
+                    use_tor_proxy = False
                     logger.warning(
-                        f"{BITCOIN_FASTSYNC_FILE} is an unexpected size, {file_size} < {remote_file_length}"
+                        "Not automatically setting --usetorproxy as --notorproxy is set"
                     )
-                    if not can_resume:
+                else:
+                    use_tor_proxy = True
+                    logger.info("Automatically setting --usetorproxy")
+
+        setConnectionParameters(allow_set_tor=False)
+
+        if use_tor_proxy and TEST_TOR_PROXY:
+            testTorConnection()
+
+        if use_tor_proxy and TEST_ONION_LINK:
+            testOnionLink()
+
+        should_download_btc_fastsync = False
+        if extra_opts.get("use_btc_fastsync", False) is True:
+            if "bitcoin" in with_coins or add_coin == "bitcoin":
+                should_download_btc_fastsync = True
+            else:
+                logger.warning("Ignoring usebtcfastsync option without Bitcoin selected.")
+
+        if should_download_btc_fastsync:
+            logger.info(f"Preparing BTC Fastsync file {BITCOIN_FASTSYNC_FILE}")
+            sync_file_path = os.path.join(data_dir, BITCOIN_FASTSYNC_FILE)
+            sync_file_url = os.path.join(BITCOIN_FASTSYNC_URL, BITCOIN_FASTSYNC_FILE)
+            try:
+                check_btc_fastsync = extra_opts.get("check_btc_fastsync", True)
+                check_sig = False
+                if not os.path.exists(sync_file_path):
+                    downloadFile(sync_file_url, sync_file_path, timeout=50)
+                    check_sig = check_btc_fastsync
+                elif check_btc_fastsync:
+                    file_size = os.stat(sync_file_path).st_size
+                    remote_file_length, can_resume = getRemoteFileLength(sync_file_url)
+                    if file_size < remote_file_length:
                         logger.warning(
-                            f"{BITCOIN_FASTSYNC_URL} can not be resumed, restarting download."
+                            f"{BITCOIN_FASTSYNC_FILE} is an unexpected size, {file_size} < {remote_file_length}"
                         )
-                        file_size = 0
-                    downloadFile(
-                        sync_file_url, sync_file_path, timeout=50, resume_from=file_size
+                        if not can_resume:
+                            logger.warning(
+                                f"{BITCOIN_FASTSYNC_URL} can not be resumed, restarting download."
+                            )
+                            file_size = 0
+                        downloadFile(
+                            sync_file_url, sync_file_path, timeout=50, resume_from=file_size
+                        )
+                        check_sig = True
+
+                if check_sig:
+                    check_btc_fastsync_data(data_dir, BITCOIN_FASTSYNC_FILE)
+            except Exception as e:
+                logger.error(
+                    f"Failed to download BTC fastsync file: {e}\nRe-running the command should resume the download or try manually downloading from {sync_file_url}"
+                )
+                return 1
+
+        withchainclients = {}
+        chainclients = {
+            "particl": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("PART"),
+                "rpchost": PART_RPC_HOST,
+                "rpcport": PART_RPC_PORT + port_offset,
+                "onionport": PART_ONION_PORT + port_offset,
+                "datadir": os.getenv("PART_DATA_DIR", os.path.join(data_dir, "particl")),
+                "bindir": os.path.join(bin_dir, "particl"),
+                "blocks_confirmed": 2,
+                "override_feerate": 0.002,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("particl"),
+                "core_version_group": 23,
+            },
+            "bitcoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("BTC"),
+                "rpchost": BTC_RPC_HOST,
+                "rpcport": BTC_RPC_PORT + port_offset,
+                "onionport": BTC_ONION_PORT + port_offset,
+                "datadir": os.getenv("BTC_DATA_DIR", os.path.join(data_dir, "bitcoin")),
+                "bindir": os.path.join(bin_dir, "bitcoin"),
+                "port": BTC_PORT + port_offset,
+                "use_segwit": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("bitcoin"),
+                "core_version_group": 28,
+            },
+            "litecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("LTC"),
+                "rpchost": LTC_RPC_HOST,
+                "rpcport": LTC_RPC_PORT + port_offset,
+                "onionport": LTC_ONION_PORT + port_offset,
+                "datadir": os.getenv("LTC_DATA_DIR", os.path.join(data_dir, "litecoin")),
+                "bindir": os.path.join(bin_dir, "litecoin"),
+                "use_segwit": True,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("litecoin"),
+                "core_version_group": 20,
+                "min_relay_fee": 0.00001,
+            },
+            "decred": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DCR"),
+                "manage_wallet_daemon": shouldManageDaemon("DCR_WALLET"),
+                "wallet_pwd": DCR_WALLET_PWD if WALLET_ENCRYPTION_PWD == "" else "",
+                "rpchost": DCR_RPC_HOST,
+                "rpcport": DCR_RPC_PORT + port_offset,
+                "walletrpchost": DCR_WALLET_RPC_HOST,
+                "walletrpcport": DCR_WALLET_RPC_PORT + port_offset,
+                "rpcuser": DCR_RPC_USER,
+                "rpcpassword": DCR_RPC_PWD,
+                "datadir": os.getenv("DCR_DATA_DIR", os.path.join(data_dir, "decred")),
+                "bindir": os.path.join(bin_dir, "decred"),
+                "use_csv": True,
+                "use_segwit": True,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("decred"),
+                "core_type_group": "dcr",
+                "config_filename": "dcrd.conf",
+                "min_relay_fee": 0.00001,
+            },
+            "namecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("NMC"),
+                "rpchost": NMC_RPC_HOST,
+                "rpcport": NMC_RPC_PORT + port_offset,
+                "onionport": NMC_ONION_PORT + port_offset,
+                "datadir": os.getenv("NMC_DATA_DIR", os.path.join(data_dir, "namecoin")),
+                "bindir": os.path.join(bin_dir, "namecoin"),
+                "port": NMC_PORT + port_offset,
+                "use_segwit": True,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("namecoin"),
+                "core_version_group": 28,
+                "chain_lookups": "local",
+            },
+            "monero": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("XMR"),
+                "manage_wallet_daemon": shouldManageDaemon("XMR_WALLET"),
+                "rpcport": XMR_RPC_PORT + port_offset,
+                "zmqport": XMR_ZMQ_PORT + port_offset,
+                "walletrpcport": XMR_WALLET_RPC_PORT + port_offset,
+                "rpchost": XMR_RPC_HOST,
+                "trusted_daemon": extra_opts.get("trust_remote_node", True),
+                "walletrpchost": XMR_WALLET_RPC_HOST,
+                "walletrpcuser": XMR_WALLET_RPC_USER,
+                "walletrpcpassword": XMR_WALLET_RPC_PWD,
+                "datadir": os.getenv("XMR_DATA_DIR", os.path.join(data_dir, "monero")),
+                "bindir": os.path.join(bin_dir, "monero"),
+                "restore_height": xmr_restore_height,
+                "blocks_confirmed": 3,
+                "rpctimeout": 60,
+                "walletrpctimeout": 120,
+                "walletrpctimeoutlong": 600,
+                "wallet_config_filename": "monero_wallet.conf",
+                "core_version_no": getKnownVersion("monero"),
+                "core_type_group": "xmr",
+            },
+            "wownero": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("WOW"),
+                "manage_wallet_daemon": shouldManageDaemon("WOW_WALLET"),
+                "rpcport": WOW_RPC_PORT + port_offset,
+                "zmqport": WOW_ZMQ_PORT + port_offset,
+                "walletrpcport": WOW_WALLET_RPC_PORT + port_offset,
+                "rpchost": WOW_RPC_HOST,
+                "trusted_daemon": extra_opts.get("trust_remote_node", True),
+                "walletrpchost": WOW_WALLET_RPC_HOST,
+                "walletrpcuser": WOW_WALLET_RPC_USER,
+                "walletrpcpassword": WOW_WALLET_RPC_PWD,
+                "datadir": os.getenv("WOW_DATA_DIR", os.path.join(data_dir, "wownero")),
+                "bindir": os.path.join(bin_dir, "wownero"),
+                "restore_height": wow_restore_height,
+                "blocks_confirmed": 2,
+                "rpctimeout": 60,
+                "walletrpctimeout": 120,
+                "walletrpctimeoutlong": 300,
+                "core_version_no": getKnownVersion("wownero"),
+                "core_type_group": "xmr",
+            },
+            "pivx": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("PIVX"),
+                "rpchost": PIVX_RPC_HOST,
+                "rpcport": PIVX_RPC_PORT + port_offset,
+                "onionport": PIVX_ONION_PORT + port_offset,
+                "datadir": os.getenv("PIVX_DATA_DIR", os.path.join(data_dir, "pivx")),
+                "bindir": os.path.join(bin_dir, "pivx"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("pivx"),
+                "core_version_group": 17,
+            },
+            "dash": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DASH"),
+                "rpchost": DASH_RPC_HOST,
+                "rpcport": DASH_RPC_PORT + port_offset,
+                "onionport": DASH_ONION_PORT + port_offset,
+                "datadir": os.getenv("DASH_DATA_DIR", os.path.join(data_dir, "dash")),
+                "bindir": os.path.join(bin_dir, "dash"),
+                "use_segwit": False,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("dash"),
+                "core_version_group": 18,
+            },
+            "firo": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("FIRO"),
+                "rpchost": FIRO_RPC_HOST,
+                "rpcport": FIRO_RPC_PORT + port_offset,
+                "onionport": FIRO_ONION_PORT + port_offset,
+                "datadir": os.getenv("FIRO_DATA_DIR", os.path.join(data_dir, "firo")),
+                "bindir": os.path.join(bin_dir, "firo"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("firo"),
+                "core_version_group": 14,
+                "min_relay_fee": 0.00001,
+            },
+            "navcoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("NAV"),
+                "rpchost": NAV_RPC_HOST,
+                "rpcport": NAV_RPC_PORT + port_offset,
+                "onionport": NAV_ONION_PORT + port_offset,
+                "datadir": os.getenv("NAV_DATA_DIR", os.path.join(data_dir, "navcoin")),
+                "bindir": os.path.join(bin_dir, "navcoin"),
+                "use_segwit": True,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("navcoin"),
+                "core_version_group": 18,
+                "chain_lookups": "local",
+                "startup_tries": 40,
+            },
+            "bitcoincash": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("BCH"),
+                "rpchost": BCH_RPC_HOST,
+                "rpcport": BCH_RPC_PORT + port_offset,
+                "onionport": BCH_ONION_PORT + port_offset,
+                "datadir": os.getenv("BCH_DATA_DIR", os.path.join(data_dir, "bitcoincash")),
+                "bindir": os.path.join(bin_dir, "bitcoincash"),
+                "port": BCH_PORT + port_offset,
+                "config_filename": "bitcoin.conf",
+                "use_segwit": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("bitcoincash"),
+                "core_version_group": 22,
+            },
+            "dogecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DOGE"),
+                "rpchost": DOGE_RPC_HOST,
+                "rpcport": DOGE_RPC_PORT + port_offset,
+                "onionport": DOGE_ONION_PORT + port_offset,
+                "datadir": os.getenv("DOGE_DATA_DIR", os.path.join(data_dir, "dogecoin")),
+                "bindir": os.path.join(bin_dir, "dogecoin"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("dogecoin"),
+                "core_version_group": 23,
+                "min_relay_fee": 0.01,  # RECOMMENDED_MIN_TX_FEE
+            },
+        }
+
+        for coin_name, coin_settings in chainclients.items():
+            coin_id = getCoinIdFromName(coin_name)
+            coin_params = chainparams[coin_id]
+            if coin_settings.get("core_type_group", "") == "xmr":
+                default_name = "swap_wallet"
+            else:
+                default_name = "wallet.dat"
+
+            if coin_name == "litecoin":
+                set_name: str = getWalletName(
+                    coin_params, "mweb", prefix_override="LTC_MWEB"
+                )
+                if set_name != "mweb":
+                    coin_settings["mweb_wallet_name"] = set_name
+
+            set_name: str = getWalletName(coin_params, default_name)
+            if set_name != default_name:
+                coin_settings["wallet_name"] = set_name
+
+            ticker: str = coin_params["ticker"]
+            if getDescriptorWalletOption(coin_params):
+                if coin_id not in (Coins.BTC, Coins.NMC):
+                    raise ValueError(f"Descriptor wallet unavailable for {coin_name}")
+
+                coin_settings["use_descriptors"] = True
+                coin_settings["watch_wallet_name"] = getWalletName(
+                    coin_params, "bsx_watch", prefix_override=f"{ticker}_WATCH"
+                )
+
+        if PART_RPC_USER != "":
+            chainclients["particl"]["rpcuser"] = PART_RPC_USER
+            chainclients["particl"]["rpcpassword"] = PART_RPC_PWD
+        if LTC_RPC_USER != "":
+            chainclients["litecoin"]["rpcuser"] = LTC_RPC_USER
+            chainclients["litecoin"]["rpcpassword"] = LTC_RPC_PWD
+        if DOGE_RPC_USER != "":
+            chainclients["dogecoin"]["rpcuser"] = DOGE_RPC_USER
+            chainclients["dogecoin"]["rpcpassword"] = DOGE_RPC_PWD
+        if BTC_RPC_USER != "":
+            chainclients["bitcoin"]["rpcuser"] = BTC_RPC_USER
+            chainclients["bitcoin"]["rpcpassword"] = BTC_RPC_PWD
+        if BCH_RPC_USER != "":
+            chainclients["bitcoincash"]["rpcuser"] = BCH_RPC_USER
+            chainclients["bitcoincash"]["rpcpassword"] = BCH_RPC_PWD
+        if XMR_RPC_USER != "":
+            chainclients["monero"]["rpcuser"] = XMR_RPC_USER
+            chainclients["monero"]["rpcpassword"] = XMR_RPC_PWD
+        if WOW_RPC_USER != "":
+            chainclients["wownero"]["rpcuser"] = WOW_RPC_USER
+            chainclients["wownero"]["rpcpassword"] = WOW_RPC_PWD
+        if PIVX_RPC_USER != "":
+            chainclients["pivx"]["rpcuser"] = PIVX_RPC_USER
+            chainclients["pivx"]["rpcpassword"] = PIVX_RPC_PWD
+        if DASH_RPC_USER != "":
+            chainclients["dash"]["rpcuser"] = DASH_RPC_USER
+            chainclients["dash"]["rpcpassword"] = DASH_RPC_PWD
+        if FIRO_RPC_USER != "":
+            chainclients["firo"]["rpcuser"] = FIRO_RPC_USER
+            chainclients["firo"]["rpcpassword"] = FIRO_RPC_PWD
+        if NAV_RPC_USER != "":
+            chainclients["nav"]["rpcuser"] = NAV_RPC_USER
+            chainclients["nav"]["rpcpassword"] = NAV_RPC_PWD
+
+        chainclients["monero"]["walletsdir"] = os.getenv(
+            "XMR_WALLETS_DIR", chainclients["monero"]["datadir"]
+        )
+        chainclients["wownero"]["walletsdir"] = os.getenv(
+            "WOW_WALLETS_DIR", chainclients["wownero"]["datadir"]
+        )
+
+        if extra_opts.get("dash_v20_compatible", False):
+            chainclients["dash"]["wallet_v20_compatible"] = True
+
+        if initwalletsonly:
+            logger.info("Initialising wallets")
+            settings = load_config(config_path)
+
+            init_coins = settings["chainclients"].keys()
+            logger.info("Active coins: %s", ", ".join(init_coins))
+            if with_coins_changed:
+                init_coins = with_coins
+                logger.info("Initialising coins: %s", ", ".join(init_coins))
+            initialise_wallets(
+                particl_wallet_mnemonic,
+                init_coins,
+                data_dir,
+                settings,
+                chain,
+                use_tor_proxy,
+                extra_opts=extra_opts,
+            )
+
+            print("Done.")
+            return 0
+
+        if enable_tor:
+            logger.info("Enabling TOR")
+            settings = load_config(config_path)
+
+            tor_control_password = settings.get("tor_control_password", None)
+            if tor_control_password is None:
+                tor_control_password = generate_salt(24)
+                settings["tor_control_password"] = tor_control_password
+            write_torrc(data_dir, tor_control_password)
+
+            addTorSettings(settings, tor_control_password)
+            for coin in settings["chainclients"]:
+                modify_tor_config(
+                    settings, coin, tor_control_password, enable=True, extra_opts=extra_opts
+                )
+
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
+
+        if disable_tor:
+            logger.info("Disabling TOR")
+            settings = load_config(config_path)
+            if not settings.get("use_tor", False):
+                logger.info("TOR is not enabled.")  # Continue anyway to clear any config
+            settings["use_tor"] = False
+            for coin in settings["chainclients"]:
+                modify_tor_config(
+                    settings,
+                    coin,
+                    tor_control_password=None,
+                    enable=False,
+                    extra_opts=extra_opts,
+                )
+
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
+
+        if disable_coin != "":
+            if "particl" in disable_coin:
+                exitWithError("Cannot disable Particl (required for operation)")
+
+            logger.info("Disabling coin: %s", disable_coin)
+            settings = load_config(config_path)
+
+            if disable_coin not in settings["chainclients"]:
+                exitWithError(f"{disable_coin} not configured")
+
+            coin_settings = settings["chainclients"][disable_coin]
+            if (
+                coin_settings["connection_type"] == "none"
+                and coin_settings["manage_daemon"] is False
+            ):
+                exitWithError(f"{disable_coin} is already disabled")
+            coin_settings["connection_type"] = "none"
+            coin_settings["manage_daemon"] = False
+            if "manage_wallet_daemon" in coin_settings:
+                coin_settings["manage_wallet_daemon"] = False
+
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
+
+        extra_opts["data_dir"] = data_dir
+        extra_opts["tor_control_password"] = tor_control_password
+
+        if add_coin != "":
+            logger.info("Adding coin: %s", add_coin)
+            settings = load_config(config_path)
+
+            if add_coin in settings["chainclients"]:
+                coin_settings = settings["chainclients"][add_coin]
+                if (
+                    coin_settings["connection_type"] == "none"
+                    and coin_settings["manage_daemon"] is False
+                ):
+                    logger.info("Enabling coin: %s", add_coin)
+                    coin_settings["connection_type"] = "rpc"
+                    coin_settings["manage_daemon"] = True
+                    if "manage_wallet_daemon" in coin_settings:
+                        coin_settings["manage_wallet_daemon"] = True
+                    save_config(config_path, settings)
+                    logger.info("Done.")
+                    return 0
+                exitWithError("{} is already in the settings file".format(add_coin))
+
+            if tor_control_password is None and settings.get("use_tor", False):
+                extra_opts["tor_control_password"] = settings.get(
+                    "tor_control_password", None
+                )
+
+            if particl_wallet_mnemonic != "none":
+                # Ensure Particl wallet is unencrypted or correct password is supplied
+                test_particl_encryption(data_dir, settings, chain, use_tor_proxy)
+
+            settings["chainclients"][add_coin] = chainclients[add_coin]
+
+            if not no_cores:
+                prepareCore(add_coin, known_coins[add_coin], settings, data_dir, extra_opts)
+
+            if not (prepare_bin_only or upgrade_cores):
+                prepareDataDir(
+                    add_coin, settings, chain, particl_wallet_mnemonic, extra_opts
+                )
+
+                if particl_wallet_mnemonic != "none":
+                    initialise_wallets(
+                        None,
+                        {
+                            add_coin,
+                        },
+                        data_dir,
+                        settings,
+                        chain,
+                        use_tor_proxy,
+                        extra_opts=extra_opts,
                     )
-                    check_sig = True
 
-            if check_sig:
-                check_btc_fastsync_data(data_dir, BITCOIN_FASTSYNC_FILE)
-        except Exception as e:
-            logger.error(
-                f"Failed to download BTC fastsync file: {e}\nRe-running the command should resume the download or try manually downloading from {sync_file_url}"
-            )
-            return 1
+                save_config(config_path, settings)
 
-    withchainclients = {}
-    chainclients = {
-        "particl": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("PART"),
-            "rpchost": PART_RPC_HOST,
-            "rpcport": PART_RPC_PORT + port_offset,
-            "onionport": PART_ONION_PORT + port_offset,
-            "datadir": os.getenv("PART_DATA_DIR", os.path.join(data_dir, "particl")),
-            "bindir": os.path.join(bin_dir, "particl"),
-            "blocks_confirmed": 2,
-            "override_feerate": 0.002,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("particl"),
-            "core_version_group": 23,
-        },
-        "bitcoin": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("BTC"),
-            "rpchost": BTC_RPC_HOST,
-            "rpcport": BTC_RPC_PORT + port_offset,
-            "onionport": BTC_ONION_PORT + port_offset,
-            "datadir": os.getenv("BTC_DATA_DIR", os.path.join(data_dir, "bitcoin")),
-            "bindir": os.path.join(bin_dir, "bitcoin"),
-            "port": BTC_PORT + port_offset,
-            "use_segwit": True,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("bitcoin"),
-            "core_version_group": 28,
-        },
-        "litecoin": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("LTC"),
-            "rpchost": LTC_RPC_HOST,
-            "rpcport": LTC_RPC_PORT + port_offset,
-            "onionport": LTC_ONION_PORT + port_offset,
-            "datadir": os.getenv("LTC_DATA_DIR", os.path.join(data_dir, "litecoin")),
-            "bindir": os.path.join(bin_dir, "litecoin"),
-            "use_segwit": True,
-            "blocks_confirmed": 2,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("litecoin"),
-            "core_version_group": 20,
-            "min_relay_fee": 0.00001,
-        },
-        "decred": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("DCR"),
-            "manage_wallet_daemon": shouldManageDaemon("DCR_WALLET"),
-            "wallet_pwd": DCR_WALLET_PWD if WALLET_ENCRYPTION_PWD == "" else "",
-            "rpchost": DCR_RPC_HOST,
-            "rpcport": DCR_RPC_PORT + port_offset,
-            "walletrpchost": DCR_WALLET_RPC_HOST,
-            "walletrpcport": DCR_WALLET_RPC_PORT + port_offset,
-            "rpcuser": DCR_RPC_USER,
-            "rpcpassword": DCR_RPC_PWD,
-            "datadir": os.getenv("DCR_DATA_DIR", os.path.join(data_dir, "decred")),
-            "bindir": os.path.join(bin_dir, "decred"),
-            "use_csv": True,
-            "use_segwit": True,
-            "blocks_confirmed": 2,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("decred"),
-            "core_type_group": "dcr",
-            "config_filename": "dcrd.conf",
-            "min_relay_fee": 0.00001,
-        },
-        "namecoin": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("NMC"),
-            "rpchost": NMC_RPC_HOST,
-            "rpcport": NMC_RPC_PORT + port_offset,
-            "onionport": NMC_ONION_PORT + port_offset,
-            "datadir": os.getenv("NMC_DATA_DIR", os.path.join(data_dir, "namecoin")),
-            "bindir": os.path.join(bin_dir, "namecoin"),
-            "port": NMC_PORT + port_offset,
-            "use_segwit": True,
-            "use_csv": True,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("namecoin"),
-            "core_version_group": 28,
-            "chain_lookups": "local",
-        },
-        "monero": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("XMR"),
-            "manage_wallet_daemon": shouldManageDaemon("XMR_WALLET"),
-            "rpcport": XMR_RPC_PORT + port_offset,
-            "zmqport": XMR_ZMQ_PORT + port_offset,
-            "walletrpcport": XMR_WALLET_RPC_PORT + port_offset,
-            "rpchost": XMR_RPC_HOST,
-            "trusted_daemon": extra_opts.get("trust_remote_node", True),
-            "walletrpchost": XMR_WALLET_RPC_HOST,
-            "walletrpcuser": XMR_WALLET_RPC_USER,
-            "walletrpcpassword": XMR_WALLET_RPC_PWD,
-            "datadir": os.getenv("XMR_DATA_DIR", os.path.join(data_dir, "monero")),
-            "bindir": os.path.join(bin_dir, "monero"),
-            "restore_height": xmr_restore_height,
-            "blocks_confirmed": 3,
-            "rpctimeout": 60,
-            "walletrpctimeout": 120,
-            "walletrpctimeoutlong": 600,
-            "wallet_config_filename": "monero_wallet.conf",
-            "core_version_no": getKnownVersion("monero"),
-            "core_type_group": "xmr",
-        },
-        "wownero": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("WOW"),
-            "manage_wallet_daemon": shouldManageDaemon("WOW_WALLET"),
-            "rpcport": WOW_RPC_PORT + port_offset,
-            "zmqport": WOW_ZMQ_PORT + port_offset,
-            "walletrpcport": WOW_WALLET_RPC_PORT + port_offset,
-            "rpchost": WOW_RPC_HOST,
-            "trusted_daemon": extra_opts.get("trust_remote_node", True),
-            "walletrpchost": WOW_WALLET_RPC_HOST,
-            "walletrpcuser": WOW_WALLET_RPC_USER,
-            "walletrpcpassword": WOW_WALLET_RPC_PWD,
-            "datadir": os.getenv("WOW_DATA_DIR", os.path.join(data_dir, "wownero")),
-            "bindir": os.path.join(bin_dir, "wownero"),
-            "restore_height": wow_restore_height,
-            "blocks_confirmed": 2,
-            "rpctimeout": 60,
-            "walletrpctimeout": 120,
-            "walletrpctimeoutlong": 300,
-            "core_version_no": getKnownVersion("wownero"),
-            "core_type_group": "xmr",
-        },
-        "pivx": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("PIVX"),
-            "rpchost": PIVX_RPC_HOST,
-            "rpcport": PIVX_RPC_PORT + port_offset,
-            "onionport": PIVX_ONION_PORT + port_offset,
-            "datadir": os.getenv("PIVX_DATA_DIR", os.path.join(data_dir, "pivx")),
-            "bindir": os.path.join(bin_dir, "pivx"),
-            "use_segwit": False,
-            "use_csv": False,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("pivx"),
-            "core_version_group": 17,
-        },
-        "dash": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("DASH"),
-            "rpchost": DASH_RPC_HOST,
-            "rpcport": DASH_RPC_PORT + port_offset,
-            "onionport": DASH_ONION_PORT + port_offset,
-            "datadir": os.getenv("DASH_DATA_DIR", os.path.join(data_dir, "dash")),
-            "bindir": os.path.join(bin_dir, "dash"),
-            "use_segwit": False,
-            "use_csv": True,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("dash"),
-            "core_version_group": 18,
-        },
-        "firo": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("FIRO"),
-            "rpchost": FIRO_RPC_HOST,
-            "rpcport": FIRO_RPC_PORT + port_offset,
-            "onionport": FIRO_ONION_PORT + port_offset,
-            "datadir": os.getenv("FIRO_DATA_DIR", os.path.join(data_dir, "firo")),
-            "bindir": os.path.join(bin_dir, "firo"),
-            "use_segwit": False,
-            "use_csv": False,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("firo"),
-            "core_version_group": 14,
-            "min_relay_fee": 0.00001,
-        },
-        "navcoin": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("NAV"),
-            "rpchost": NAV_RPC_HOST,
-            "rpcport": NAV_RPC_PORT + port_offset,
-            "onionport": NAV_ONION_PORT + port_offset,
-            "datadir": os.getenv("NAV_DATA_DIR", os.path.join(data_dir, "navcoin")),
-            "bindir": os.path.join(bin_dir, "navcoin"),
-            "use_segwit": True,
-            "use_csv": True,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("navcoin"),
-            "core_version_group": 18,
-            "chain_lookups": "local",
-            "startup_tries": 40,
-        },
-        "bitcoincash": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("BCH"),
-            "rpchost": BCH_RPC_HOST,
-            "rpcport": BCH_RPC_PORT + port_offset,
-            "onionport": BCH_ONION_PORT + port_offset,
-            "datadir": os.getenv("BCH_DATA_DIR", os.path.join(data_dir, "bitcoincash")),
-            "bindir": os.path.join(bin_dir, "bitcoincash"),
-            "port": BCH_PORT + port_offset,
-            "config_filename": "bitcoin.conf",
-            "use_segwit": False,
-            "blocks_confirmed": 1,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("bitcoincash"),
-            "core_version_group": 22,
-        },
-        "dogecoin": {
-            "connection_type": "rpc",
-            "manage_daemon": shouldManageDaemon("DOGE"),
-            "rpchost": DOGE_RPC_HOST,
-            "rpcport": DOGE_RPC_PORT + port_offset,
-            "onionport": DOGE_ONION_PORT + port_offset,
-            "datadir": os.getenv("DOGE_DATA_DIR", os.path.join(data_dir, "dogecoin")),
-            "bindir": os.path.join(bin_dir, "dogecoin"),
-            "use_segwit": False,
-            "use_csv": False,
-            "blocks_confirmed": 2,
-            "conf_target": 2,
-            "core_version_no": getKnownVersion("dogecoin"),
-            "core_version_group": 23,
-            "min_relay_fee": 0.01,  # RECOMMENDED_MIN_TX_FEE
-        },
-    }
+            logger.info(f"Done. Coin {add_coin} successfully added.")
+            return 0
 
-    for coin_name, coin_settings in chainclients.items():
-        coin_id = getCoinIdFromName(coin_name)
-        coin_params = chainparams[coin_id]
-        if coin_settings.get("core_type_group", "") == "xmr":
-            default_name = "swap_wallet"
+        logger.info(
+            "With coins: "
+            + (", ".join(with_coins))
+            + ("" if with_coins_changed else " (default)")
+        )
+        if os.path.exists(config_path):
+            if prepare_bin_only:
+                settings = load_config(config_path)
+
+                # Add temporary default config for any coins that have not been added
+                for c in with_coins:
+                    if c not in settings["chainclients"]:
+                        settings["chainclients"][c] = chainclients[c]
+            elif upgrade_cores:
+                settings = load_config(config_path)
+
+                with_coins_start = with_coins
+                if not with_coins_changed:
+                    for coin_name, coin_settings in settings["chainclients"].items():
+                        with_coins_start.add(coin_name)
+
+                with_coins = set()
+                for coin_name in with_coins_start:
+                    if coin_name not in chainclients:
+                        logger.warning(f"Skipping unknown coin: {coin_name}.")
+                        continue
+                    current_coin_settings = chainclients[coin_name]
+                    if coin_name not in settings["chainclients"]:
+                        exitWithError(f"{coin_name} not found in basicswap.json")
+                    coin_settings = settings["chainclients"][coin_name]
+
+                    current_version = current_coin_settings["core_version_no"]
+                    have_version = coin_settings.get("core_version_no", "")
+
+                    current_version_group = current_coin_settings.get(
+                        "core_version_group", ""
+                    )
+                    have_version_group = coin_settings.get("core_version_group", "")
+
+                    logger.info(
+                        f"{coin_name}: have {have_version}, current {current_version}."
+                    )
+                    if not BSX_UPDATE_UNMANAGED and not (
+                        coin_settings.get("manage_daemon", False)
+                        or coin_settings.get("manage_wallet_daemon", False)
+                    ):
+                        logger.info("  Unmanaged.")
+                    elif have_version != current_version:
+                        logger.info(f"  Trying to update {coin_name}.")
+                        with_coins.add(coin_name)
+                    elif have_version_group != current_version_group:
+                        logger.info(
+                            f"  Trying to update {coin_name}, version group differs."
+                        )
+                        with_coins.add(coin_name)
+
+                if len(with_coins) < 1:
+                    logger.info("Nothing to do.")
+                    return 0
+
+                # Run second loop to update, so all versions are logged together.
+                # Backup settings
+                old_config_path = config_path[:-5] + "_" + str(int(time.time())) + ".json"
+                save_config(old_config_path, settings, add_options=False)
+
+                for c in with_coins:
+                    prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
+                    current_coin_settings = chainclients[c]
+                    current_version = current_coin_settings["core_version_no"]
+                    current_version_group = current_coin_settings.get(
+                        "core_version_group", ""
+                    )
+                    settings["chainclients"][c]["core_version_no"] = current_version
+                    if current_version_group != "":
+                        settings["chainclients"][c][
+                            "core_version_group"
+                        ] = current_version_group
+                    save_config(config_path, settings)
+
+                logger.info("Done.")
+                return 0
+            else:
+                exitWithError(f"{config_path} exists")
         else:
-            default_name = "wallet.dat"
+            if upgrade_cores:
+                exitWithError(f"{config_path} not found")
 
-        if coin_name == "litecoin":
-            set_name: str = getWalletName(
-                coin_params, "mweb", prefix_override="LTC_MWEB"
-            )
-            if set_name != "mweb":
-                coin_settings["mweb_wallet_name"] = set_name
+            for c in with_coins:
+                withchainclients[c] = chainclients[c]
 
-        set_name: str = getWalletName(coin_params, default_name)
-        if set_name != default_name:
-            coin_settings["wallet_name"] = set_name
+            settings = {
+                "debug": True,
+                "zmqhost": f"tcp://{PART_RPC_HOST}",
+                "zmqport": PART_ZMQ_PORT + port_offset,
+                "htmlhost": htmlhost,
+                "htmlport": UI_HTML_PORT + port_offset,
+                "network_key": "7sW2UEcHXvuqEjkpE5mD584zRaQYs6WXYohue4jLFZPTvMSxwvgs",
+                "network_pubkey": "035758c4a22d7dd59165db02a56156e790224361eb3191f02197addcb3bde903d2",
+                "chainclients": withchainclients,
+                "min_delay_event": 5,  # Min delay in seconds before reacting to an event
+                "max_delay_event": 50,  # Max delay in seconds before reacting to an event
+                "check_progress_seconds": 60,
+                "check_watched_seconds": 60,
+                "check_expired_seconds": 60,
+                "wallet_update_timeout": 10,  # Seconds to wait for wallet page update
+            }
 
-        ticker: str = coin_params["ticker"]
-        if getDescriptorWalletOption(coin_params):
-            if coin_id not in (Coins.BTC, Coins.NMC):
-                raise ValueError(f"Descriptor wallet unavailable for {coin_name}")
+            wshost: str = extra_opts.get("wshost", htmlhost)
+            if wshost != "none":
+                settings["wshost"] = wshost
+                settings["wsport"] = UI_WS_PORT + port_offset
 
-            coin_settings["use_descriptors"] = True
-            coin_settings["watch_wallet_name"] = getWalletName(
-                coin_params, "bsx_watch", prefix_override=f"{ticker}_WATCH"
-            )
+        if use_tor_proxy:
+            tor_control_password = generate_salt(24)
+            addTorSettings(settings, tor_control_password)
 
-    if PART_RPC_USER != "":
-        chainclients["particl"]["rpcuser"] = PART_RPC_USER
-        chainclients["particl"]["rpcpassword"] = PART_RPC_PWD
-    if LTC_RPC_USER != "":
-        chainclients["litecoin"]["rpcuser"] = LTC_RPC_USER
-        chainclients["litecoin"]["rpcpassword"] = LTC_RPC_PWD
-    if DOGE_RPC_USER != "":
-        chainclients["dogecoin"]["rpcuser"] = DOGE_RPC_USER
-        chainclients["dogecoin"]["rpcpassword"] = DOGE_RPC_PWD
-    if BTC_RPC_USER != "":
-        chainclients["bitcoin"]["rpcuser"] = BTC_RPC_USER
-        chainclients["bitcoin"]["rpcpassword"] = BTC_RPC_PWD
-    if BCH_RPC_USER != "":
-        chainclients["bitcoincash"]["rpcuser"] = BCH_RPC_USER
-        chainclients["bitcoincash"]["rpcpassword"] = BCH_RPC_PWD
-    if XMR_RPC_USER != "":
-        chainclients["monero"]["rpcuser"] = XMR_RPC_USER
-        chainclients["monero"]["rpcpassword"] = XMR_RPC_PWD
-    if WOW_RPC_USER != "":
-        chainclients["wownero"]["rpcuser"] = WOW_RPC_USER
-        chainclients["wownero"]["rpcpassword"] = WOW_RPC_PWD
-    if PIVX_RPC_USER != "":
-        chainclients["pivx"]["rpcuser"] = PIVX_RPC_USER
-        chainclients["pivx"]["rpcpassword"] = PIVX_RPC_PWD
-    if DASH_RPC_USER != "":
-        chainclients["dash"]["rpcuser"] = DASH_RPC_USER
-        chainclients["dash"]["rpcpassword"] = DASH_RPC_PWD
-    if FIRO_RPC_USER != "":
-        chainclients["firo"]["rpcuser"] = FIRO_RPC_USER
-        chainclients["firo"]["rpcpassword"] = FIRO_RPC_PWD
-    if NAV_RPC_USER != "":
-        chainclients["nav"]["rpcuser"] = NAV_RPC_USER
-        chainclients["nav"]["rpcpassword"] = NAV_RPC_PWD
+        if client_auth_pwd_value is not None:
+            settings["client_auth_hash"] = rfc2440_hash_password(client_auth_pwd_value)
+            logger.info("Client authentication password set.")
 
-    chainclients["monero"]["walletsdir"] = os.getenv(
-        "XMR_WALLETS_DIR", chainclients["monero"]["datadir"]
-    )
-    chainclients["wownero"]["walletsdir"] = os.getenv(
-        "WOW_WALLETS_DIR", chainclients["wownero"]["datadir"]
-    )
+        if not no_cores:
+            for c in with_coins:
+                prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
 
-    if extra_opts.get("dash_v20_compatible", False):
-        chainclients["dash"]["wallet_v20_compatible"] = True
+        if prepare_bin_only:
+            logger.info("Done.")
+            return 0
 
-    if initwalletsonly:
-        logger.info("Initialising wallets")
-        settings = load_config(config_path)
+        for c in with_coins:
+            prepareDataDir(c, settings, chain, particl_wallet_mnemonic, extra_opts)
 
-        init_coins = settings["chainclients"].keys()
-        logger.info("Active coins: %s", ", ".join(init_coins))
-        if with_coins_changed:
-            init_coins = with_coins
-            logger.info("Initialising coins: %s", ", ".join(init_coins))
+        if particl_wallet_mnemonic == "none":
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
+
         initialise_wallets(
             particl_wallet_mnemonic,
-            init_coins,
+            with_coins,
             data_dir,
             settings,
             chain,
             use_tor_proxy,
             extra_opts=extra_opts,
         )
-
-        print("Done.")
-        return 0
-
-    if enable_tor:
-        logger.info("Enabling TOR")
-        settings = load_config(config_path)
-
-        tor_control_password = settings.get("tor_control_password", None)
-        if tor_control_password is None:
-            tor_control_password = generate_salt(24)
-            settings["tor_control_password"] = tor_control_password
-        write_torrc(data_dir, tor_control_password)
-
-        addTorSettings(settings, tor_control_password)
-        for coin in settings["chainclients"]:
-            modify_tor_config(
-                settings, coin, tor_control_password, enable=True, extra_opts=extra_opts
-            )
-
         save_config(config_path, settings)
-        logger.info("Done.")
-        return 0
+        print("Done.")
 
-    if disable_tor:
-        logger.info("Disabling TOR")
-        settings = load_config(config_path)
-        if not settings.get("use_tor", False):
-            logger.info("TOR is not enabled.")  # Continue anyway to clear any config
-        settings["use_tor"] = False
-        for coin in settings["chainclients"]:
-            modify_tor_config(
+    else:
+        logger.info("UPDATEs CORES!!!")
+        return 0
+        if print_versions:
+            printVersion(with_coins)
+            return 0
+
+        if data_dir is None:
+            data_dir = os.path.join(os.path.expanduser(cfg.BASICSWAP_DATADIR))
+        if bin_dir is None:
+            bin_dir = os.path.join(data_dir, "bin")
+
+        logger.info(f"BasicSwap prepare script {__version__}\n")
+        logger.info(f"Python version: {platform.python_version()}")
+        logger.info(f"Data dir: {data_dir}")
+        logger.info(f"Bin dir: {bin_dir}")
+        logger.info(f"Chain: {chain}")
+        logger.info(
+            "WALLET_ENCRYPTION_PWD is {}set".format(
+                "not " if WALLET_ENCRYPTION_PWD == "" else ""
+            )
+        )
+
+        if port_offset is None:
+            port_offset = 300 if chain == "testnet" else 0
+
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir)
+        config_path = os.path.join(data_dir, cfg.CONFIG_FILENAME)
+
+        config_exists = os.path.exists(config_path)
+        if config_exists and (
+            client_auth_pwd_value is not None or disable_client_auth_flag
+        ):
+            try:
+                settings = load_config(config_path)
+                modified = False
+                if client_auth_pwd_value is not None:
+                    settings["client_auth_hash"] = rfc2440_hash_password(
+                        client_auth_pwd_value
+                    )
+                    logger.info("Client authentication password updated.")
+                    modified = True
+                elif disable_client_auth_flag:
+                    if "client_auth_hash" in settings:
+                        del settings["client_auth_hash"]
+                        logger.info("Client authentication disabled.")
+                        modified = True
+                    else:
+                        logger.info("Client authentication is already disabled.")
+
+                if modified:
+                    with open(config_path, "w") as fp:
+                        json.dump(settings, fp, indent=4)
+                return 0
+            except Exception as e:
+                exitWithError(f"Failed to update client auth settings: {e}")
+
+        if use_tor_proxy and extra_opts.get("no_tor_proxy", False):
+            exitWithError("Can't use --usetorproxy and --notorproxy together")
+
+        # Automatically enable usetorproxy for certain commands if it's set in basicswap config
+        if (
+            not (initwalletsonly or enable_tor or disable_tor or disable_coin)
+            and not use_tor_proxy
+            and os.path.exists(config_path)
+        ):
+            settings = load_config(config_path)
+            settings_use_tor = settings.get("use_tor", False)
+            if settings_use_tor:
+                logger.info("use_tor is set in the config")
+                if extra_opts.get("no_tor_proxy", False):
+                    use_tor_proxy = False
+                    logger.warning(
+                        "Not automatically setting --usetorproxy as --notorproxy is set"
+                    )
+                else:
+                    use_tor_proxy = True
+                    logger.info("Automatically setting --usetorproxy")
+
+        setConnectionParameters(allow_set_tor=False)
+
+        if use_tor_proxy and TEST_TOR_PROXY:
+            testTorConnection()
+
+        if use_tor_proxy and TEST_ONION_LINK:
+            testOnionLink()
+
+        should_download_btc_fastsync = False
+        if extra_opts.get("use_btc_fastsync", False) is True:
+            if "bitcoin" in with_coins or add_coin == "bitcoin":
+                should_download_btc_fastsync = True
+            else:
+                logger.warning("Ignoring usebtcfastsync option without Bitcoin selected.")
+
+        if should_download_btc_fastsync:
+            logger.info(f"Preparing BTC Fastsync file {BITCOIN_FASTSYNC_FILE}")
+            sync_file_path = os.path.join(data_dir, BITCOIN_FASTSYNC_FILE)
+            sync_file_url = os.path.join(BITCOIN_FASTSYNC_URL, BITCOIN_FASTSYNC_FILE)
+            try:
+                check_btc_fastsync = extra_opts.get("check_btc_fastsync", True)
+                check_sig = False
+                if not os.path.exists(sync_file_path):
+                    downloadFile(sync_file_url, sync_file_path, timeout=50)
+                    check_sig = check_btc_fastsync
+                elif check_btc_fastsync:
+                    file_size = os.stat(sync_file_path).st_size
+                    remote_file_length, can_resume = getRemoteFileLength(sync_file_url)
+                    if file_size < remote_file_length:
+                        logger.warning(
+                            f"{BITCOIN_FASTSYNC_FILE} is an unexpected size, {file_size} < {remote_file_length}"
+                        )
+                        if not can_resume:
+                            logger.warning(
+                                f"{BITCOIN_FASTSYNC_URL} can not be resumed, restarting download."
+                            )
+                            file_size = 0
+                        downloadFile(
+                            sync_file_url, sync_file_path, timeout=50, resume_from=file_size
+                        )
+                        check_sig = True
+
+                if check_sig:
+                    check_btc_fastsync_data(data_dir, BITCOIN_FASTSYNC_FILE)
+            except Exception as e:
+                logger.error(
+                    f"Failed to download BTC fastsync file: {e}\nRe-running the command should resume the download or try manually downloading from {sync_file_url}"
+                )
+                return 1
+
+        withchainclients = {}
+        chainclients = {
+            "particl": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("PART"),
+                "rpchost": PART_RPC_HOST,
+                "rpcport": PART_RPC_PORT + port_offset,
+                "onionport": PART_ONION_PORT + port_offset,
+                "datadir": os.getenv("PART_DATA_DIR", os.path.join(data_dir, "particl")),
+                "bindir": os.path.join(bin_dir, "particl"),
+                "blocks_confirmed": 2,
+                "override_feerate": 0.002,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("particl"),
+                "core_version_group": 23,
+            },
+            "bitcoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("BTC"),
+                "rpchost": BTC_RPC_HOST,
+                "rpcport": BTC_RPC_PORT + port_offset,
+                "onionport": BTC_ONION_PORT + port_offset,
+                "datadir": os.getenv("BTC_DATA_DIR", os.path.join(data_dir, "bitcoin")),
+                "bindir": os.path.join(bin_dir, "bitcoin"),
+                "port": BTC_PORT + port_offset,
+                "use_segwit": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("bitcoin"),
+                "core_version_group": 28,
+            },
+            "litecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("LTC"),
+                "rpchost": LTC_RPC_HOST,
+                "rpcport": LTC_RPC_PORT + port_offset,
+                "onionport": LTC_ONION_PORT + port_offset,
+                "datadir": os.getenv("LTC_DATA_DIR", os.path.join(data_dir, "litecoin")),
+                "bindir": os.path.join(bin_dir, "litecoin"),
+                "use_segwit": True,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("litecoin"),
+                "core_version_group": 20,
+                "min_relay_fee": 0.00001,
+            },
+            "decred": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DCR"),
+                "manage_wallet_daemon": shouldManageDaemon("DCR_WALLET"),
+                "wallet_pwd": DCR_WALLET_PWD if WALLET_ENCRYPTION_PWD == "" else "",
+                "rpchost": DCR_RPC_HOST,
+                "rpcport": DCR_RPC_PORT + port_offset,
+                "walletrpchost": DCR_WALLET_RPC_HOST,
+                "walletrpcport": DCR_WALLET_RPC_PORT + port_offset,
+                "rpcuser": DCR_RPC_USER,
+                "rpcpassword": DCR_RPC_PWD,
+                "datadir": os.getenv("DCR_DATA_DIR", os.path.join(data_dir, "decred")),
+                "bindir": os.path.join(bin_dir, "decred"),
+                "use_csv": True,
+                "use_segwit": True,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("decred"),
+                "core_type_group": "dcr",
+                "config_filename": "dcrd.conf",
+                "min_relay_fee": 0.00001,
+            },
+            "namecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("NMC"),
+                "rpchost": NMC_RPC_HOST,
+                "rpcport": NMC_RPC_PORT + port_offset,
+                "onionport": NMC_ONION_PORT + port_offset,
+                "datadir": os.getenv("NMC_DATA_DIR", os.path.join(data_dir, "namecoin")),
+                "bindir": os.path.join(bin_dir, "namecoin"),
+                "port": NMC_PORT + port_offset,
+                "use_segwit": True,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("namecoin"),
+                "core_version_group": 28,
+                "chain_lookups": "local",
+            },
+            "monero": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("XMR"),
+                "manage_wallet_daemon": shouldManageDaemon("XMR_WALLET"),
+                "rpcport": XMR_RPC_PORT + port_offset,
+                "zmqport": XMR_ZMQ_PORT + port_offset,
+                "walletrpcport": XMR_WALLET_RPC_PORT + port_offset,
+                "rpchost": XMR_RPC_HOST,
+                "trusted_daemon": extra_opts.get("trust_remote_node", True),
+                "walletrpchost": XMR_WALLET_RPC_HOST,
+                "walletrpcuser": XMR_WALLET_RPC_USER,
+                "walletrpcpassword": XMR_WALLET_RPC_PWD,
+                "datadir": os.getenv("XMR_DATA_DIR", os.path.join(data_dir, "monero")),
+                "bindir": os.path.join(bin_dir, "monero"),
+                "restore_height": xmr_restore_height,
+                "blocks_confirmed": 3,
+                "rpctimeout": 60,
+                "walletrpctimeout": 120,
+                "walletrpctimeoutlong": 600,
+                "wallet_config_filename": "monero_wallet.conf",
+                "core_version_no": getKnownVersion("monero"),
+                "core_type_group": "xmr",
+            },
+            "wownero": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("WOW"),
+                "manage_wallet_daemon": shouldManageDaemon("WOW_WALLET"),
+                "rpcport": WOW_RPC_PORT + port_offset,
+                "zmqport": WOW_ZMQ_PORT + port_offset,
+                "walletrpcport": WOW_WALLET_RPC_PORT + port_offset,
+                "rpchost": WOW_RPC_HOST,
+                "trusted_daemon": extra_opts.get("trust_remote_node", True),
+                "walletrpchost": WOW_WALLET_RPC_HOST,
+                "walletrpcuser": WOW_WALLET_RPC_USER,
+                "walletrpcpassword": WOW_WALLET_RPC_PWD,
+                "datadir": os.getenv("WOW_DATA_DIR", os.path.join(data_dir, "wownero")),
+                "bindir": os.path.join(bin_dir, "wownero"),
+                "restore_height": wow_restore_height,
+                "blocks_confirmed": 2,
+                "rpctimeout": 60,
+                "walletrpctimeout": 120,
+                "walletrpctimeoutlong": 300,
+                "core_version_no": getKnownVersion("wownero"),
+                "core_type_group": "xmr",
+            },
+            "pivx": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("PIVX"),
+                "rpchost": PIVX_RPC_HOST,
+                "rpcport": PIVX_RPC_PORT + port_offset,
+                "onionport": PIVX_ONION_PORT + port_offset,
+                "datadir": os.getenv("PIVX_DATA_DIR", os.path.join(data_dir, "pivx")),
+                "bindir": os.path.join(bin_dir, "pivx"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("pivx"),
+                "core_version_group": 17,
+            },
+            "dash": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DASH"),
+                "rpchost": DASH_RPC_HOST,
+                "rpcport": DASH_RPC_PORT + port_offset,
+                "onionport": DASH_ONION_PORT + port_offset,
+                "datadir": os.getenv("DASH_DATA_DIR", os.path.join(data_dir, "dash")),
+                "bindir": os.path.join(bin_dir, "dash"),
+                "use_segwit": False,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("dash"),
+                "core_version_group": 18,
+            },
+            "firo": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("FIRO"),
+                "rpchost": FIRO_RPC_HOST,
+                "rpcport": FIRO_RPC_PORT + port_offset,
+                "onionport": FIRO_ONION_PORT + port_offset,
+                "datadir": os.getenv("FIRO_DATA_DIR", os.path.join(data_dir, "firo")),
+                "bindir": os.path.join(bin_dir, "firo"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("firo"),
+                "core_version_group": 14,
+                "min_relay_fee": 0.00001,
+            },
+            "navcoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("NAV"),
+                "rpchost": NAV_RPC_HOST,
+                "rpcport": NAV_RPC_PORT + port_offset,
+                "onionport": NAV_ONION_PORT + port_offset,
+                "datadir": os.getenv("NAV_DATA_DIR", os.path.join(data_dir, "navcoin")),
+                "bindir": os.path.join(bin_dir, "navcoin"),
+                "use_segwit": True,
+                "use_csv": True,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("navcoin"),
+                "core_version_group": 18,
+                "chain_lookups": "local",
+                "startup_tries": 40,
+            },
+            "bitcoincash": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("BCH"),
+                "rpchost": BCH_RPC_HOST,
+                "rpcport": BCH_RPC_PORT + port_offset,
+                "onionport": BCH_ONION_PORT + port_offset,
+                "datadir": os.getenv("BCH_DATA_DIR", os.path.join(data_dir, "bitcoincash")),
+                "bindir": os.path.join(bin_dir, "bitcoincash"),
+                "port": BCH_PORT + port_offset,
+                "config_filename": "bitcoin.conf",
+                "use_segwit": False,
+                "blocks_confirmed": 1,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("bitcoincash"),
+                "core_version_group": 22,
+            },
+            "dogecoin": {
+                "connection_type": "rpc",
+                "manage_daemon": shouldManageDaemon("DOGE"),
+                "rpchost": DOGE_RPC_HOST,
+                "rpcport": DOGE_RPC_PORT + port_offset,
+                "onionport": DOGE_ONION_PORT + port_offset,
+                "datadir": os.getenv("DOGE_DATA_DIR", os.path.join(data_dir, "dogecoin")),
+                "bindir": os.path.join(bin_dir, "dogecoin"),
+                "use_segwit": False,
+                "use_csv": False,
+                "blocks_confirmed": 2,
+                "conf_target": 2,
+                "core_version_no": getKnownVersion("dogecoin"),
+                "core_version_group": 23,
+                "min_relay_fee": 0.01,  # RECOMMENDED_MIN_TX_FEE
+            },
+        }
+
+        for coin_name, coin_settings in chainclients.items():
+            coin_id = getCoinIdFromName(coin_name)
+            coin_params = chainparams[coin_id]
+            if coin_settings.get("core_type_group", "") == "xmr":
+                default_name = "swap_wallet"
+            else:
+                default_name = "wallet.dat"
+
+            if coin_name == "litecoin":
+                set_name: str = getWalletName(
+                    coin_params, "mweb", prefix_override="LTC_MWEB"
+                )
+                if set_name != "mweb":
+                    coin_settings["mweb_wallet_name"] = set_name
+
+            set_name: str = getWalletName(coin_params, default_name)
+            if set_name != default_name:
+                coin_settings["wallet_name"] = set_name
+
+            ticker: str = coin_params["ticker"]
+            if getDescriptorWalletOption(coin_params):
+                if coin_id not in (Coins.BTC, Coins.NMC):
+                    raise ValueError(f"Descriptor wallet unavailable for {coin_name}")
+
+                coin_settings["use_descriptors"] = True
+                coin_settings["watch_wallet_name"] = getWalletName(
+                    coin_params, "bsx_watch", prefix_override=f"{ticker}_WATCH"
+                )
+
+        if PART_RPC_USER != "":
+            chainclients["particl"]["rpcuser"] = PART_RPC_USER
+            chainclients["particl"]["rpcpassword"] = PART_RPC_PWD
+        if LTC_RPC_USER != "":
+            chainclients["litecoin"]["rpcuser"] = LTC_RPC_USER
+            chainclients["litecoin"]["rpcpassword"] = LTC_RPC_PWD
+        if DOGE_RPC_USER != "":
+            chainclients["dogecoin"]["rpcuser"] = DOGE_RPC_USER
+            chainclients["dogecoin"]["rpcpassword"] = DOGE_RPC_PWD
+        if BTC_RPC_USER != "":
+            chainclients["bitcoin"]["rpcuser"] = BTC_RPC_USER
+            chainclients["bitcoin"]["rpcpassword"] = BTC_RPC_PWD
+        if BCH_RPC_USER != "":
+            chainclients["bitcoincash"]["rpcuser"] = BCH_RPC_USER
+            chainclients["bitcoincash"]["rpcpassword"] = BCH_RPC_PWD
+        if XMR_RPC_USER != "":
+            chainclients["monero"]["rpcuser"] = XMR_RPC_USER
+            chainclients["monero"]["rpcpassword"] = XMR_RPC_PWD
+        if WOW_RPC_USER != "":
+            chainclients["wownero"]["rpcuser"] = WOW_RPC_USER
+            chainclients["wownero"]["rpcpassword"] = WOW_RPC_PWD
+        if PIVX_RPC_USER != "":
+            chainclients["pivx"]["rpcuser"] = PIVX_RPC_USER
+            chainclients["pivx"]["rpcpassword"] = PIVX_RPC_PWD
+        if DASH_RPC_USER != "":
+            chainclients["dash"]["rpcuser"] = DASH_RPC_USER
+            chainclients["dash"]["rpcpassword"] = DASH_RPC_PWD
+        if FIRO_RPC_USER != "":
+            chainclients["firo"]["rpcuser"] = FIRO_RPC_USER
+            chainclients["firo"]["rpcpassword"] = FIRO_RPC_PWD
+        if NAV_RPC_USER != "":
+            chainclients["nav"]["rpcuser"] = NAV_RPC_USER
+            chainclients["nav"]["rpcpassword"] = NAV_RPC_PWD
+
+        chainclients["monero"]["walletsdir"] = os.getenv(
+            "XMR_WALLETS_DIR", chainclients["monero"]["datadir"]
+        )
+        chainclients["wownero"]["walletsdir"] = os.getenv(
+            "WOW_WALLETS_DIR", chainclients["wownero"]["datadir"]
+        )
+
+        if extra_opts.get("dash_v20_compatible", False):
+            chainclients["dash"]["wallet_v20_compatible"] = True
+
+        if initwalletsonly:
+            logger.info("Initialising wallets")
+            settings = load_config(config_path)
+
+            init_coins = settings["chainclients"].keys()
+            logger.info("Active coins: %s", ", ".join(init_coins))
+            if with_coins_changed:
+                init_coins = with_coins
+                logger.info("Initialising coins: %s", ", ".join(init_coins))
+            initialise_wallets(
+                particl_wallet_mnemonic,
+                init_coins,
+                data_dir,
                 settings,
-                coin,
-                tor_control_password=None,
-                enable=False,
+                chain,
+                use_tor_proxy,
                 extra_opts=extra_opts,
             )
 
-        save_config(config_path, settings)
-        logger.info("Done.")
-        return 0
+            print("Done.")
+            return 0
 
-    if disable_coin != "":
-        if "particl" in disable_coin:
-            exitWithError("Cannot disable Particl (required for operation)")
+        if enable_tor:
+            logger.info("Enabling TOR")
+            settings = load_config(config_path)
 
-        logger.info("Disabling coin: %s", disable_coin)
-        settings = load_config(config_path)
+            tor_control_password = settings.get("tor_control_password", None)
+            if tor_control_password is None:
+                tor_control_password = generate_salt(24)
+                settings["tor_control_password"] = tor_control_password
+            write_torrc(data_dir, tor_control_password)
 
-        if disable_coin not in settings["chainclients"]:
-            exitWithError(f"{disable_coin} not configured")
+            addTorSettings(settings, tor_control_password)
+            for coin in settings["chainclients"]:
+                modify_tor_config(
+                    settings, coin, tor_control_password, enable=True, extra_opts=extra_opts
+                )
 
-        coin_settings = settings["chainclients"][disable_coin]
-        if (
-            coin_settings["connection_type"] == "none"
-            and coin_settings["manage_daemon"] is False
-        ):
-            exitWithError(f"{disable_coin} is already disabled")
-        coin_settings["connection_type"] = "none"
-        coin_settings["manage_daemon"] = False
-        if "manage_wallet_daemon" in coin_settings:
-            coin_settings["manage_wallet_daemon"] = False
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
 
-        save_config(config_path, settings)
-        logger.info("Done.")
-        return 0
-
-    extra_opts["data_dir"] = data_dir
-    extra_opts["tor_control_password"] = tor_control_password
-
-    if add_coin != "":
-        logger.info("Adding coin: %s", add_coin)
-        settings = load_config(config_path)
-
-        if add_coin in settings["chainclients"]:
-            coin_settings = settings["chainclients"][add_coin]
-            if (
-                coin_settings["connection_type"] == "none"
-                and coin_settings["manage_daemon"] is False
-            ):
-                logger.info("Enabling coin: %s", add_coin)
-                coin_settings["connection_type"] = "rpc"
-                coin_settings["manage_daemon"] = True
-                if "manage_wallet_daemon" in coin_settings:
-                    coin_settings["manage_wallet_daemon"] = True
-                save_config(config_path, settings)
-                logger.info("Done.")
-                return 0
-            exitWithError("{} is already in the settings file".format(add_coin))
-
-        if tor_control_password is None and settings.get("use_tor", False):
-            extra_opts["tor_control_password"] = settings.get(
-                "tor_control_password", None
-            )
-
-        if particl_wallet_mnemonic != "none":
-            # Ensure Particl wallet is unencrypted or correct password is supplied
-            test_particl_encryption(data_dir, settings, chain, use_tor_proxy)
-
-        settings["chainclients"][add_coin] = chainclients[add_coin]
-
-        if not no_cores:
-            prepareCore(add_coin, known_coins[add_coin], settings, data_dir, extra_opts)
-
-        if not (prepare_bin_only or upgrade_cores):
-            prepareDataDir(
-                add_coin, settings, chain, particl_wallet_mnemonic, extra_opts
-            )
-
-            if particl_wallet_mnemonic != "none":
-                initialise_wallets(
-                    None,
-                    {
-                        add_coin,
-                    },
-                    data_dir,
+        if disable_tor:
+            logger.info("Disabling TOR")
+            settings = load_config(config_path)
+            if not settings.get("use_tor", False):
+                logger.info("TOR is not enabled.")  # Continue anyway to clear any config
+            settings["use_tor"] = False
+            for coin in settings["chainclients"]:
+                modify_tor_config(
                     settings,
-                    chain,
-                    use_tor_proxy,
+                    coin,
+                    tor_control_password=None,
+                    enable=False,
                     extra_opts=extra_opts,
                 )
 
             save_config(config_path, settings)
-
-        logger.info(f"Done. Coin {add_coin} successfully added.")
-        return 0
-
-    logger.info(
-        "With coins: "
-        + (", ".join(with_coins))
-        + ("" if with_coins_changed else " (default)")
-    )
-    if os.path.exists(config_path):
-        if prepare_bin_only:
-            settings = load_config(config_path)
-
-            # Add temporary default config for any coins that have not been added
-            for c in with_coins:
-                if c not in settings["chainclients"]:
-                    settings["chainclients"][c] = chainclients[c]
-        elif upgrade_cores:
-            settings = load_config(config_path)
-
-            with_coins_start = with_coins
-            if not with_coins_changed:
-                for coin_name, coin_settings in settings["chainclients"].items():
-                    with_coins_start.add(coin_name)
-
-            with_coins = set()
-            for coin_name in with_coins_start:
-                if coin_name not in chainclients:
-                    logger.warning(f"Skipping unknown coin: {coin_name}.")
-                    continue
-                current_coin_settings = chainclients[coin_name]
-                if coin_name not in settings["chainclients"]:
-                    exitWithError(f"{coin_name} not found in basicswap.json")
-                coin_settings = settings["chainclients"][coin_name]
-
-                current_version = current_coin_settings["core_version_no"]
-                have_version = coin_settings.get("core_version_no", "")
-
-                current_version_group = current_coin_settings.get(
-                    "core_version_group", ""
-                )
-                have_version_group = coin_settings.get("core_version_group", "")
-
-                logger.info(
-                    f"{coin_name}: have {have_version}, current {current_version}."
-                )
-                if not BSX_UPDATE_UNMANAGED and not (
-                    coin_settings.get("manage_daemon", False)
-                    or coin_settings.get("manage_wallet_daemon", False)
-                ):
-                    logger.info("  Unmanaged.")
-                elif have_version != current_version:
-                    logger.info(f"  Trying to update {coin_name}.")
-                    with_coins.add(coin_name)
-                elif have_version_group != current_version_group:
-                    logger.info(
-                        f"  Trying to update {coin_name}, version group differs."
-                    )
-                    with_coins.add(coin_name)
-
-            if len(with_coins) < 1:
-                logger.info("Nothing to do.")
-                return 0
-
-            # Run second loop to update, so all versions are logged together.
-            # Backup settings
-            old_config_path = config_path[:-5] + "_" + str(int(time.time())) + ".json"
-            save_config(old_config_path, settings, add_options=False)
-
-            for c in with_coins:
-                prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
-                current_coin_settings = chainclients[c]
-                current_version = current_coin_settings["core_version_no"]
-                current_version_group = current_coin_settings.get(
-                    "core_version_group", ""
-                )
-                settings["chainclients"][c]["core_version_no"] = current_version
-                if current_version_group != "":
-                    settings["chainclients"][c][
-                        "core_version_group"
-                    ] = current_version_group
-                save_config(config_path, settings)
-
             logger.info("Done.")
             return 0
+
+        if disable_coin != "":
+            if "particl" in disable_coin:
+                exitWithError("Cannot disable Particl (required for operation)")
+
+            logger.info("Disabling coin: %s", disable_coin)
+            settings = load_config(config_path)
+
+            if disable_coin not in settings["chainclients"]:
+                exitWithError(f"{disable_coin} not configured")
+
+            coin_settings = settings["chainclients"][disable_coin]
+            if (
+                coin_settings["connection_type"] == "none"
+                and coin_settings["manage_daemon"] is False
+            ):
+                exitWithError(f"{disable_coin} is already disabled")
+            coin_settings["connection_type"] = "none"
+            coin_settings["manage_daemon"] = False
+            if "manage_wallet_daemon" in coin_settings:
+                coin_settings["manage_wallet_daemon"] = False
+
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
+
+        extra_opts["data_dir"] = data_dir
+        extra_opts["tor_control_password"] = tor_control_password
+
+        if add_coin != "":
+            logger.info("Adding coin: %s", add_coin)
+            settings = load_config(config_path)
+
+            if add_coin in settings["chainclients"]:
+                coin_settings = settings["chainclients"][add_coin]
+                if (
+                    coin_settings["connection_type"] == "none"
+                    and coin_settings["manage_daemon"] is False
+                ):
+                    logger.info("Enabling coin: %s", add_coin)
+                    coin_settings["connection_type"] = "rpc"
+                    coin_settings["manage_daemon"] = True
+                    if "manage_wallet_daemon" in coin_settings:
+                        coin_settings["manage_wallet_daemon"] = True
+                    save_config(config_path, settings)
+                    logger.info("Done.")
+                    return 0
+                exitWithError("{} is already in the settings file".format(add_coin))
+
+            if tor_control_password is None and settings.get("use_tor", False):
+                extra_opts["tor_control_password"] = settings.get(
+                    "tor_control_password", None
+                )
+
+            if particl_wallet_mnemonic != "none":
+                # Ensure Particl wallet is unencrypted or correct password is supplied
+                test_particl_encryption(data_dir, settings, chain, use_tor_proxy)
+
+            settings["chainclients"][add_coin] = chainclients[add_coin]
+
+            if not no_cores:
+                prepareCore(add_coin, known_coins[add_coin], settings, data_dir, extra_opts)
+
+            if not (prepare_bin_only or upgrade_cores):
+                prepareDataDir(
+                    add_coin, settings, chain, particl_wallet_mnemonic, extra_opts
+                )
+
+                if particl_wallet_mnemonic != "none":
+                    initialise_wallets(
+                        None,
+                        {
+                            add_coin,
+                        },
+                        data_dir,
+                        settings,
+                        chain,
+                        use_tor_proxy,
+                        extra_opts=extra_opts,
+                    )
+
+                save_config(config_path, settings)
+
+            logger.info(f"Done. Coin {add_coin} successfully added.")
+            return 0
+
+        logger.info(
+            "With coins: "
+            + (", ".join(with_coins))
+            + ("" if with_coins_changed else " (default)")
+        )
+        if os.path.exists(config_path):
+            if prepare_bin_only:
+                settings = load_config(config_path)
+
+                # Add temporary default config for any coins that have not been added
+                for c in with_coins:
+                    if c not in settings["chainclients"]:
+                        settings["chainclients"][c] = chainclients[c]
+            elif upgrade_cores:
+                settings = load_config(config_path)
+
+                with_coins_start = with_coins
+                if not with_coins_changed:
+                    for coin_name, coin_settings in settings["chainclients"].items():
+                        with_coins_start.add(coin_name)
+
+                with_coins = set()
+                for coin_name in with_coins_start:
+                    if coin_name not in chainclients:
+                        logger.warning(f"Skipping unknown coin: {coin_name}.")
+                        continue
+                    current_coin_settings = chainclients[coin_name]
+                    if coin_name not in settings["chainclients"]:
+                        exitWithError(f"{coin_name} not found in basicswap.json")
+                    coin_settings = settings["chainclients"][coin_name]
+
+                    current_version = current_coin_settings["core_version_no"]
+                    have_version = coin_settings.get("core_version_no", "")
+
+                    current_version_group = current_coin_settings.get(
+                        "core_version_group", ""
+                    )
+                    have_version_group = coin_settings.get("core_version_group", "")
+
+                    logger.info(
+                        f"{coin_name}: have {have_version}, current {current_version}."
+                    )
+                    if not BSX_UPDATE_UNMANAGED and not (
+                        coin_settings.get("manage_daemon", False)
+                        or coin_settings.get("manage_wallet_daemon", False)
+                    ):
+                        logger.info("  Unmanaged.")
+                    elif have_version != current_version:
+                        logger.info(f"  Trying to update {coin_name}.")
+                        with_coins.add(coin_name)
+                    elif have_version_group != current_version_group:
+                        logger.info(
+                            f"  Trying to update {coin_name}, version group differs."
+                        )
+                        with_coins.add(coin_name)
+
+                if len(with_coins) < 1:
+                    logger.info("Nothing to do.")
+                    return 0
+
+                # Run second loop to update, so all versions are logged together.
+                # Backup settings
+                old_config_path = config_path[:-5] + "_" + str(int(time.time())) + ".json"
+                save_config(old_config_path, settings, add_options=False)
+
+                for c in with_coins:
+                    prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
+                    current_coin_settings = chainclients[c]
+                    current_version = current_coin_settings["core_version_no"]
+                    current_version_group = current_coin_settings.get(
+                        "core_version_group", ""
+                    )
+                    settings["chainclients"][c]["core_version_no"] = current_version
+                    if current_version_group != "":
+                        settings["chainclients"][c][
+                            "core_version_group"
+                        ] = current_version_group
+                    save_config(config_path, settings)
+
+                logger.info("Done.")
+                return 0
+            else:
+                exitWithError(f"{config_path} exists")
         else:
-            exitWithError(f"{config_path} exists")
-    else:
-        if upgrade_cores:
-            exitWithError(f"{config_path} not found")
+            if upgrade_cores:
+                exitWithError(f"{config_path} not found")
+
+            for c in with_coins:
+                withchainclients[c] = chainclients[c]
+
+            settings = {
+                "debug": True,
+                "zmqhost": f"tcp://{PART_RPC_HOST}",
+                "zmqport": PART_ZMQ_PORT + port_offset,
+                "htmlhost": htmlhost,
+                "htmlport": UI_HTML_PORT + port_offset,
+                "network_key": "7sW2UEcHXvuqEjkpE5mD584zRaQYs6WXYohue4jLFZPTvMSxwvgs",
+                "network_pubkey": "035758c4a22d7dd59165db02a56156e790224361eb3191f02197addcb3bde903d2",
+                "chainclients": withchainclients,
+                "min_delay_event": 5,  # Min delay in seconds before reacting to an event
+                "max_delay_event": 50,  # Max delay in seconds before reacting to an event
+                "check_progress_seconds": 60,
+                "check_watched_seconds": 60,
+                "check_expired_seconds": 60,
+                "wallet_update_timeout": 10,  # Seconds to wait for wallet page update
+            }
+
+            wshost: str = extra_opts.get("wshost", htmlhost)
+            if wshost != "none":
+                settings["wshost"] = wshost
+                settings["wsport"] = UI_WS_PORT + port_offset
+
+        if use_tor_proxy:
+            tor_control_password = generate_salt(24)
+            addTorSettings(settings, tor_control_password)
+
+        if client_auth_pwd_value is not None:
+            settings["client_auth_hash"] = rfc2440_hash_password(client_auth_pwd_value)
+            logger.info("Client authentication password set.")
+
+        if not no_cores:
+            for c in with_coins:
+                prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
+
+        if prepare_bin_only:
+            logger.info("Done.")
+            return 0
 
         for c in with_coins:
-            withchainclients[c] = chainclients[c]
+            prepareDataDir(c, settings, chain, particl_wallet_mnemonic, extra_opts)
 
-        settings = {
-            "debug": True,
-            "zmqhost": f"tcp://{PART_RPC_HOST}",
-            "zmqport": PART_ZMQ_PORT + port_offset,
-            "htmlhost": htmlhost,
-            "htmlport": UI_HTML_PORT + port_offset,
-            "network_key": "7sW2UEcHXvuqEjkpE5mD584zRaQYs6WXYohue4jLFZPTvMSxwvgs",
-            "network_pubkey": "035758c4a22d7dd59165db02a56156e790224361eb3191f02197addcb3bde903d2",
-            "chainclients": withchainclients,
-            "min_delay_event": 5,  # Min delay in seconds before reacting to an event
-            "max_delay_event": 50,  # Max delay in seconds before reacting to an event
-            "check_progress_seconds": 60,
-            "check_watched_seconds": 60,
-            "check_expired_seconds": 60,
-            "wallet_update_timeout": 10,  # Seconds to wait for wallet page update
-        }
+        if particl_wallet_mnemonic == "none":
+            save_config(config_path, settings)
+            logger.info("Done.")
+            return 0
 
-        wshost: str = extra_opts.get("wshost", htmlhost)
-        if wshost != "none":
-            settings["wshost"] = wshost
-            settings["wsport"] = UI_WS_PORT + port_offset
-
-    if use_tor_proxy:
-        tor_control_password = generate_salt(24)
-        addTorSettings(settings, tor_control_password)
-
-    if client_auth_pwd_value is not None:
-        settings["client_auth_hash"] = rfc2440_hash_password(client_auth_pwd_value)
-        logger.info("Client authentication password set.")
-
-    if not no_cores:
-        for c in with_coins:
-            prepareCore(c, known_coins[c], settings, data_dir, extra_opts)
-
-    if prepare_bin_only:
-        logger.info("Done.")
-        return 0
-
-    for c in with_coins:
-        prepareDataDir(c, settings, chain, particl_wallet_mnemonic, extra_opts)
-
-    if particl_wallet_mnemonic == "none":
+        initialise_wallets(
+            particl_wallet_mnemonic,
+            with_coins,
+            data_dir,
+            settings,
+            chain,
+            use_tor_proxy,
+            extra_opts=extra_opts,
+        )
         save_config(config_path, settings)
-        logger.info("Done.")
-        return 0
-
-    initialise_wallets(
-        particl_wallet_mnemonic,
-        with_coins,
-        data_dir,
-        settings,
-        chain,
-        use_tor_proxy,
-        extra_opts=extra_opts,
-    )
-    save_config(config_path, settings)
-    print("Done.")
+        print("Done.")
 
 
 if __name__ == "__main__":
