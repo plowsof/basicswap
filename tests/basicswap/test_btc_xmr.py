@@ -303,6 +303,181 @@ class TestFunctions(BaseTest):
         assert chain_a_lock_txid is not None
         assert chain_b_lock_txid is not None
 
+    def do_test_01_full_swap_custom_payout(
+        self, coin_from: Coins, coin_to: Coins
+    ) -> None:
+        # Verifies that when a custom payout_address is configured for the
+        # received coin, the redeem (chain B spend) is swept to that external
+        # address instead of the swap client's own wallet. See
+        # BasicSwap.getCustomPayoutAddress and redeemXmrBidCoinBLockTx.
+        logging.info(
+            f"---------- Test {coin_from.name} to {coin_to.name} custom payout"
+        )
+
+        id_offerer: int = self.node_a_id
+        id_bidder: int = self.node_b_id
+        id_external: int = self.node_c_id
+
+        swap_clients = self.swap_clients
+        # The offerer receives coin_to, so its redeem honours payout_address.
+        assert not swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+        ci_from = swap_clients[id_offerer].ci(coin_from)
+        ci_to = swap_clients[id_bidder].ci(coin_to)
+
+        self.prepare_balance(coin_from, 100.0, 1800 + id_offerer, 1800)
+
+        # Use a wallet the offerer does not control as the external payout target.
+        external_address: str = (
+            swap_clients[id_external].ci(coin_to).getMainWalletAddress()
+        )
+        swap_clients[id_offerer].coin_clients[coin_to][
+            "payout_address"
+        ] = external_address
+
+        external_to_before: float = self.getBalance(
+            read_json_api(1800 + id_external, "wallets"), coin_to
+        )
+        offerer_to_before: float = self.getBalance(
+            read_json_api(1800 + id_offerer, "wallets"), coin_to
+        )
+
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[id_offerer].postOffer(
+            coin_from, coin_to, amt_swap, rate_swap, amt_swap, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[id_bidder], offer_id)
+        offer = swap_clients[id_bidder].listOffers(filters={"offer_id": offer_id})[0]
+
+        bid_id = swap_clients[id_bidder].postXmrBid(offer_id, offer.amount_from)
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        swap_clients[id_offerer].acceptBid(bid_id)
+
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            wait_for=(self.extra_wait_time + 180),
+        )
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_bidder],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            sent=True,
+            wait_for=(self.extra_wait_time + 30),
+        )
+
+        scale_from = ci_from.exp()
+        amount_to = int((amt_swap * rate_swap) // (10**scale_from))
+        amount_to_float = float(ci_to.format_amount(amount_to))
+
+        # The external wallet should receive the redeemed coin_to.
+        max_fee_to: float = 0.1 if coin_to == Coins.PART_ANON else 0.02
+        wait_for_balance(
+            test_delay_event,
+            f"http://127.0.0.1:{1800 + id_external}/json/wallets/{coin_to.name.lower()}",
+            "balance",
+            external_to_before + amount_to_float - max_fee_to,
+            iterations=30,
+        )
+
+        # The offerer's own wallet should not have received the swap output.
+        offerer_to_after: float = self.getBalance(
+            read_json_api(1800 + id_offerer, "wallets"), coin_to
+        )
+        assert offerer_to_after - offerer_to_before < amount_to_float - max_fee_to
+
+        swap_clients[id_offerer].coin_clients[coin_to].pop("payout_address", None)
+
+    def do_test_01_full_swap_bidder_payout(
+        self, coin_from: Coins, coin_to: Coins
+    ) -> None:
+        # The bidder receives coin_from. Verify a bid-supplied external payout
+        # address is honoured: the chain-A spend pays it instead of the bidder's
+        # own wallet. See postXmrBid (dest_af).
+        logging.info(
+            f"---------- Test {coin_from.name} to {coin_to.name} bidder payout"
+        )
+
+        id_offerer: int = self.node_a_id
+        id_bidder: int = self.node_b_id
+        id_external: int = self.node_c_id
+
+        swap_clients = self.swap_clients
+        assert not swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+        ci_from = swap_clients[id_offerer].ci(coin_from)
+        ci_to = swap_clients[id_bidder].ci(coin_to)
+
+        self.prepare_balance(coin_from, 100.0, 1800 + id_offerer, 1800)
+
+        # Address from a wallet the bidder is not redeeming into.
+        external_address: str = (
+            swap_clients[id_external]
+            .ci(coin_from)
+            .getNewAddress(ci_from.using_segwit())
+        )
+        external_from_before: float = self.getBalance(
+            read_json_api(1800 + id_external, "wallets"), coin_from
+        )
+
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[id_offerer].postOffer(
+            coin_from, coin_to, amt_swap, rate_swap, amt_swap, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[id_bidder], offer_id)
+        offer = swap_clients[id_bidder].listOffers(filters={"offer_id": offer_id})[0]
+
+        bid_id = swap_clients[id_bidder].postXmrBid(
+            offer_id,
+            offer.amount_from,
+            extra_options={"payout_address": external_address},
+        )
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        swap_clients[id_offerer].acceptBid(bid_id)
+
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            wait_for=(self.extra_wait_time + 180),
+        )
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_bidder],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            sent=True,
+            wait_for=(self.extra_wait_time + 30),
+        )
+
+        amount_from = float(ci_from.format_amount(amt_swap))
+        # The external wallet should receive coin_from.
+        wait_for_balance(
+            test_delay_event,
+            f"http://127.0.0.1:{1800 + id_external}/json/wallets/{coin_from.name.lower()}",
+            "balance",
+            external_from_before + amount_from - 0.05,
+            iterations=30,
+        )
+
     def do_test_02_leader_recover_a_lock_tx(
         self, coin_from: Coins, coin_to: Coins, lock_value: int = 32
     ) -> None:
@@ -2068,6 +2243,16 @@ class BasicSwapTest(TestFunctions):
 
     def test_01_d_full_swap_from_part(self):
         self.do_test_01_full_swap(Coins.PART, self.test_coin_from)
+
+    def test_01_e_full_swap_custom_payout(self):
+        if not self.has_segwit:
+            return
+        self.do_test_01_full_swap_custom_payout(self.test_coin_from, Coins.XMR)
+
+    def test_01_f_full_swap_bidder_payout(self):
+        if not self.has_segwit:
+            return
+        self.do_test_01_full_swap_bidder_payout(self.test_coin_from, Coins.XMR)
 
     def test_02_a_leader_recover_a_lock_tx(self):
         if not self.has_segwit:
