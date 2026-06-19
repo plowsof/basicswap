@@ -413,7 +413,7 @@
              spellcheck="false"
              data-coin="{{ data.coin_from }}"
              placeholder="Optional: external address to receive {{ data.tla_from }} (blank = this wallet)"
-             value="{{ data.nb_payout_address }}">
+             value="{{ data.nb_payout_address | e }}">
       <p id="payout_address_feedback" class="mt-1 text-xs hidden"></p>
     </div>
   </td>

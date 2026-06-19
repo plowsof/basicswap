@@ -4707,18 +4707,24 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
         self.setStringKV(db_key, main_address, cursor)
         return main_address
 
-    def getCustomPayoutAddress(self, ci, cursor=None, validate: bool = True):
+    def getCustomPayoutAddress(self, ci, cursor=None):
         # Returns the operator-configured external payout address for the coin
-        # being received, or None if none is set. When validate is set, raises
-        # if the configured address is invalid so funds are never redeemed to a
-        # bad destination (validate=False skips the wallet RPC for cheap polling
-        # checks once the address has already been validated at redeem time).
-        coin_settings = self.coin_clients[ci.coin_type()]
-        address = coin_settings.get("payout_address", None)
+        # being received, or None if none is set. The address is intentionally
+        # NOT validated here: validation happens where it is supplied (and the
+        # spend itself rejects a malformed address), so a transient wallet RPC
+        # error can never strand an in-progress redeem. Unsupported coin types
+        # fall back to the wallet (a stealth/own address) rather than misroute.
+        address = self.coin_clients[ci.coin_type()].get("payout_address", None)
         if address is None or address == "":
             return None
-        if validate and not ci.isValidAddress(address):
-            raise ValueError(f"Invalid payout_address configured for {ci.coin_name()}")
+        # interface_type() distinguishes the blind/anon balance variants, which
+        # coin_type() collapses to the base coin.
+        if ci.interface_type() in (Coins.PART_ANON, Coins.PART_BLIND):
+            self.log.warning(
+                f"Ignoring payout_address for {ci.coin_name()}: external payout "
+                "is not supported for this coin, redeeming to wallet."
+            )
+            return None
         self.log.debug(f"Using custom payout address for {ci.coin_name()}")
         return address
 
@@ -5382,7 +5388,12 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             payout_address = extra_options.get("payout_address", None)
             if payout_address:
                 # Bidder-supplied external address to receive coin_from. Reject
-                # invalid addresses now rather than at redeem time.
+                # unsupported/invalid addresses now rather than at redeem time.
+                ensure(
+                    coin_from not in (Coins.PART_ANON, Coins.PART_BLIND),
+                    f"External payout address is not supported for {ci_from.coin_name()}, "
+                    "leave the payout address blank to receive to your wallet.",
+                )
                 ensure(
                     ci_from.isValidAddress(payout_address),
                     f"Invalid payout address for {ci_from.coin_name()}",
@@ -6118,6 +6129,27 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             ci_to = self.ci(coin_to)
             reverse_bid: bool = self.is_reverse_ads_bid(coin_from, coin_to)
 
+            payout_address = extra_options.get("payout_address", None)
+            if payout_address:
+                # The bidder receives coin_from; the external payout address is
+                # only wired for the non-reverse adaptor-sig dest_af path and not
+                # for stealth coins. Reject (rather than silently ignore) the
+                # cases that aren't supported so funds can't land somewhere
+                # unexpected.
+                ensure(
+                    not reverse_bid,
+                    "External payout address is not supported for reverse bids",
+                )
+                ensure(
+                    coin_from not in (Coins.PART_ANON, Coins.PART_BLIND),
+                    f"External payout address is not supported for {ci_from.coin_name()}, "
+                    "leave the payout address blank to receive to your wallet.",
+                )
+                ensure(
+                    ci_from.isValidAddress(payout_address),
+                    f"Invalid payout address for {ci_from.coin_name()}",
+                )
+
             self.checkCoinsReady(coin_from, coin_to)
 
             ci_from.validateFeeRate(xmr_offer.a_fee_rate)
@@ -6260,15 +6292,9 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             xmr_swap.contract_count = self.getNewContractId(cursor)
             self.setMsgSplitInfo(xmr_swap)
 
-            payout_address = extra_options.get("payout_address", None)
             if payout_address:
-                # Bidder-supplied external address to receive coin_from. Reject
-                # invalid addresses now so a bad one can't be baked into the
-                # pre-signed chain-A spend tx.
-                ensure(
-                    ci_from.isValidAddress(payout_address),
-                    f"Invalid payout address for {ci_from.coin_name()}",
-                )
+                # Bidder-supplied external address to receive coin_from
+                # (validated at the top of postXmrBid).
                 address_out = payout_address
             else:
                 address_out = self.getReceiveAddressFromPool(
@@ -7146,13 +7172,10 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
 
         if addr_redeem_out is None:
             # For the initiate-tx redeem the bidder receives coin_from, so prefer
-            # the external address they chose at bid time. Otherwise prefer an
-            # operator-configured per-coin address, else a new wallet address.
+            # the external address they chose at bid time (already validated in
+            # postBid). Otherwise prefer an operator-configured per-coin address,
+            # else a new wallet address.
             if for_txn_type != "participate" and bid.withdraw_to_addr:
-                ensure(
-                    ci.isValidAddress(bid.withdraw_to_addr),
-                    f"Invalid payout address for {ci.coin_name()}",
-                )
                 addr_redeem_out = bid.withdraw_to_addr
             else:
                 addr_redeem_out = self.getCustomPayoutAddress(ci, cursor)
@@ -8389,9 +8412,7 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             elif state == BidStates.XMR_SWAP_NOSCRIPT_TX_REDEEMED:
                 txid_hex = bid.xmr_b_lock_tx.spend_txid.hex()
 
-                custom_payout = self.getCustomPayoutAddress(
-                    ci_to, cursor, validate=False
-                )
+                custom_payout = self.getCustomPayoutAddress(ci_to, cursor)
                 if custom_payout and hasattr(ci_to, "findTxnByHashInChain"):
                     # Redeem was swept to an external address this wallet does
                     # not control, so confirm the spend tx on-chain instead of

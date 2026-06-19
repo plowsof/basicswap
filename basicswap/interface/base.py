@@ -77,6 +77,19 @@ class CoinInterface:
             return coin_chainparams["display_name"]
         return coin_chainparams["name"].capitalize()
 
+    def isValidAddress(self, address: str) -> bool:
+        # Default best-effort, offline check so every coin interface responds to
+        # isValidAddress (overridden with stronger checks by BTC/XMR). Coins
+        # without an offline decoder fall through to the spend, which rejects a
+        # malformed address.
+        decode = getattr(self, "decodeAddress", None)
+        if decode is None:
+            return True
+        try:
+            return decode(address) is not None
+        except Exception:
+            return False
+
     def ticker(self) -> str:
         ticker = chainparams[self.coin_type()]["ticker"]
         if self._network == "testnet":

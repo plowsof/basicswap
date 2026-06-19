@@ -144,10 +144,16 @@
     }
 
     function isValidAddressForCoin(coin, address) {
+      // Returns true (valid), false (definitely invalid — authoritative), or
+      // null (can't tell, don't block; the server validates on submit).
       if (!address) return null; // empty allowed (optional field)
       const c = String(coin || "").toLowerCase();
+      // Monero/Wownero have a full checksum check, so false here is reliable.
       if (c.indexOf("monero") !== -1 || c.indexOf("wownero") !== -1) return isValidMoneroAddress(address);
-      return isPlausibleBtcLikeAddress(address);
+      // Other coins use a heuristic that can't recognise every valid format
+      // (e.g. BCH cashaddr, unlisted bech32 HRPs). Never report those invalid
+      // or block the bid on them — only surface a positive hint.
+      return isPlausibleBtcLikeAddress(address) ? true : null;
     }
 
     return { isValidAddressForCoin, isValidMoneroAddress, keccak256 };
