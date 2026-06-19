@@ -16,6 +16,7 @@ from basicswap.basicswap import (
     DebugTypes,
     SwapTypes,
 )
+from basicswap.chainparams import chainparams
 from basicswap.basicswap_util import (
     TxLockTypes,
     EventLogTypes,
@@ -2253,6 +2254,112 @@ class BasicSwapTest(TestFunctions):
         if not self.has_segwit:
             return
         self.do_test_01_full_swap_bidder_payout(self.test_coin_from, Coins.XMR)
+
+    def test_01_g_payout_address_passthrough(self):
+        # The operator path: a payout_address set in a coin's chainclients
+        # settings must propagate into coin_clients (setCoinConnectParams), which
+        # is what getCustomPayoutAddress reads at redeem time.
+        swap_client = self.swap_clients[self.node_a_id]
+        coin = Coins.XMR
+        coin_name = chainparams[coin]["name"]
+        test_addr = swap_client.ci(coin).getMainWalletAddress()
+        orig_client = swap_client.coin_clients[coin]
+        try:
+            swap_client.settings["chainclients"][coin_name][
+                "payout_address"
+            ] = test_addr
+            swap_client.setCoinConnectParams(coin)
+            assert swap_client.coin_clients[coin].get("payout_address") == test_addr
+        finally:
+            # Restore the original coin_clients dict (preserves live chain state).
+            swap_client.coin_clients[coin] = orig_client
+            swap_client.settings["chainclients"][coin_name].pop("payout_address", None)
+
+    def test_01_h_payout_validation(self):
+        swap_clients = self.swap_clients
+        swap_client = swap_clients[self.node_a_id]
+
+        cursor = swap_client.openDB()
+        try:
+            # getCustomPayoutAddress must NOT validate at read time: validation
+            # at redeem could turn a transient wallet RPC error into a permanent
+            # stuck swap. It returns the configured address as-is.
+            swap_client.coin_clients[Coins.XMR][
+                "payout_address"
+            ] = "returned-without-validation"
+            assert (
+                swap_client.getCustomPayoutAddress(swap_client.ci(Coins.XMR), cursor)
+                == "returned-without-validation"
+            )
+            # Stealth coins are unsupported: fall back to the wallet (None)
+            # rather than misroute to a transparent address.
+            swap_client.coin_clients[Coins.PART_ANON]["payout_address"] = (
+                swap_client.ci(Coins.PART).getNewAddress(True)
+            )
+            assert (
+                swap_client.getCustomPayoutAddress(
+                    swap_client.ci(Coins.PART_ANON), cursor
+                )
+                is None
+            )
+        finally:
+            swap_client.closeDB(cursor, commit=False)
+            swap_client.coin_clients[Coins.XMR].pop("payout_address", None)
+            swap_client.coin_clients[Coins.PART_ANON].pop("payout_address", None)
+
+        # A bidder-supplied invalid address is rejected at bid time (the entry
+        # point, before any funds are committed).
+        coin_from = self.test_coin_from
+        self.prepare_balance(coin_from, 100.0, 1800 + self.node_a_id, 1800)
+        ci_from = swap_clients[self.node_a_id].ci(coin_from)
+        ci_to = swap_clients[self.node_b_id].ci(Coins.XMR)
+        amt = ci_from.make_int(1)
+        rate = ci_to.make_int(1)
+        offer_id = swap_clients[self.node_a_id].postOffer(
+            coin_from, Coins.XMR, amt, rate, amt, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[self.node_b_id], offer_id)
+
+        err = None
+        try:
+            swap_clients[self.node_b_id].postXmrBid(
+                offer_id, amt, extra_options={"payout_address": "not_a_valid_address"}
+            )
+        except Exception as e:
+            err = str(e)
+        assert (
+            err is not None and "payout" in err.lower()
+        ), f"postXmrBid must reject an invalid payout address, got: {err}"
+
+    def test_01_i_reverse_payout_rejected(self):
+        # A payout address on a reverse-ADS bid must be rejected (not silently
+        # ignored): the dest_af wiring only covers the non-reverse path.
+        if not self.has_segwit:
+            return
+        swap_clients = self.swap_clients
+        self.prepare_balance(Coins.XMR, 100.0, 1800 + self.node_a_id, 1801)
+        ci_from = swap_clients[self.node_a_id].ci(Coins.XMR)
+        ci_to = swap_clients[self.node_b_id].ci(self.test_coin_from)
+        amt = ci_from.make_int(1)
+        rate = ci_to.make_int(1)
+        offer_id = swap_clients[self.node_a_id].postOffer(
+            Coins.XMR, self.test_coin_from, amt, rate, amt, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[self.node_b_id], offer_id)
+        external = (
+            swap_clients[self.node_b_id].ci(self.test_coin_from).getNewAddress(True)
+        )
+
+        err = None
+        try:
+            swap_clients[self.node_b_id].postXmrBid(
+                offer_id, amt, extra_options={"payout_address": external}
+            )
+        except Exception as e:
+            err = str(e)
+        assert (
+            err is not None and "reverse" in err.lower()
+        ), f"postXmrBid must reject a payout address on a reverse bid, got: {err}"
 
     def test_02_a_leader_recover_a_lock_tx(self):
         if not self.has_segwit:

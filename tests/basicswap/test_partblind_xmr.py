@@ -634,6 +634,42 @@ class Test(BaseTest):
             assert txin["txid"] == txin_after["txid"]
             assert txin["vout"] == txin_after["vout"]
 
+    def test_07_blind_external_payout_rejected(self):
+        # Confidential (blind/anon) Particl outputs need a destination pubkey
+        # that can't be derived from a plain external address, so an external
+        # payout address must be rejected with a clear message rather than
+        # crashing (KeyError: 'pubkey').
+        logging.info("---------- Test PARTct external payout rejected")
+        swap_clients = self.swap_clients
+        self.ensure_balance(self.test_coin_from, 0, 100.0)
+
+        amt_swap = make_int(random.uniform(0.1, 2.0), scale=8, r=1)
+        rate_swap = make_int(random.uniform(0.2, 20.0), scale=12, r=1)
+        offer_id = swap_clients[0].postOffer(
+            self.test_coin_from,
+            Coins.XMR,
+            amt_swap,
+            rate_swap,
+            amt_swap,
+            SwapTypes.XMR_SWAP,
+        )
+        wait_for_offer(test_delay_event, swap_clients[1], offer_id)
+        offer = swap_clients[1].listOffers(filters={"offer_id": offer_id})[0]
+        external = swap_clients[1].ci(Coins.PART).getNewAddress(True)
+
+        err = None
+        try:
+            swap_clients[1].postXmrBid(
+                offer_id,
+                offer.amount_from,
+                extra_options={"payout_address": external},
+            )
+        except Exception as e:
+            err = str(e)
+        assert (
+            err is not None and "not supported" in err.lower()
+        ), f"blind external payout must be rejected, got: {err}"
+
 
 if __name__ == "__main__":
     unittest.main()

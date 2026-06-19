@@ -56,12 +56,26 @@ check("monero coin dispatches to checksum validator", () => {
   assert.strictEqual(A.isValidAddressForCoin("Monero", XMR), true);
   assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
 });
-check("btc-like coin accepts plausible address, rejects junk", () => {
+check("btc-like coin: plausible -> true, implausible -> null (advisory, never blocks)", () => {
   assert.strictEqual(
     A.isValidAddressForCoin("Bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
     true
   );
-  assert.strictEqual(A.isValidAddressForCoin("Bitcoin", "bad addr!!"), false);
+  // Non-authoritative: must NOT report false (would block a valid bid).
+  assert.strictEqual(A.isValidAddressForCoin("Bitcoin", "bad addr!!"), null);
+});
+check("BCH cashaddr is not falsely rejected (advisory null, not false)", () => {
+  // Regression: the heuristic can't parse cashaddr; it must not block the bid.
+  assert.strictEqual(
+    A.isValidAddressForCoin(
+      "Bitcoin Cash",
+      "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+    ),
+    null
+  );
+});
+check("monero invalid is still authoritative false (blocks)", () => {
+  assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
 });
 
 console.log("\n" + passed + " passed");

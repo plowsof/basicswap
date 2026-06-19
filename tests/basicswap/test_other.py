@@ -867,6 +867,52 @@ class Test(unittest.TestCase):
 
         del sc
 
+    def test_base_isValidAddress(self):
+        # Every coin interface must answer isValidAddress (used by the external
+        # payout feature). The base default is offline and never raises, so a
+        # coin without a BTC/XMR-style override (e.g. Decred) cannot AttributeError.
+        from basicswap.interface.base import CoinInterface
+
+        assert hasattr(CoinInterface, "isValidAddress")
+
+        class _WithDecoder(CoinInterface):
+            def decodeAddress(self, address):
+                if address == "good":
+                    return b"\x00"
+                raise ValueError("bad")
+
+        class _NoDecoder(CoinInterface):
+            pass
+
+        wd = _WithDecoder.__new__(_WithDecoder)
+        assert wd.isValidAddress("good") is True
+        assert wd.isValidAddress("bad") is False
+        # No offline decoder -> trust (the spend rejects a malformed address),
+        # but crucially does not raise.
+        no_dec = _NoDecoder.__new__(_NoDecoder)
+        assert no_dec.isValidAddress("anything") is True
+
+    def test_payout_field_escaped(self):
+        # The reflected payout_address field must be HTML-escaped: the Jinja env
+        # in http_server.py is created without autoescape, so the template must
+        # apply | e to avoid reflected XSS.
+        import basicswap
+        from jinja2 import Environment
+
+        env = Environment()  # autoescape defaults to False, like http_server
+        tmpl = env.from_string('value="{{ data.nb_payout_address | e }}"')
+        out = tmpl.render(data={"nb_payout_address": '"><script>alert(1)</script>'})
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+        offer_html = os.path.join(
+            os.path.dirname(basicswap.__file__), "templates", "offer.html"
+        )
+        with open(offer_html, "r") as fp:
+            src = fp.read()
+        assert "{{ data.nb_payout_address | e }}" in src
+        assert "{{ data.nb_payout_address }}" not in src
+
 
 if __name__ == "__main__":
     unittest.main()
