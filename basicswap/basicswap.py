@@ -6131,15 +6131,10 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
 
             payout_address = extra_options.get("payout_address", None)
             if payout_address:
-                # The bidder receives coin_from; the external payout address is
-                # only wired for the non-reverse adaptor-sig dest_af path and not
-                # for stealth coins. Reject (rather than silently ignore) the
-                # cases that aren't supported so funds can't land somewhere
-                # unexpected.
-                ensure(
-                    not reverse_bid,
-                    "External payout address is not supported for reverse bids",
-                )
+                # The bidder always receives coin_from (wired into dest_af for a
+                # normal bid, or the chain-B redeem for a reverse bid). Reject
+                # stealth coins, whose confidential outputs can't be paid to a
+                # plain external address.
                 ensure(
                     coin_from not in (Coins.PART_ANON, Coins.PART_BLIND),
                     f"External payout address is not supported for {ci_from.coin_name()}, "
@@ -6240,6 +6235,10 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
                     was_received=False,
                     message_nets=bid_message_nets,
                 )
+                if payout_address:
+                    # Reverse bid: the bidder is the leader and receives coin_from
+                    # (the scriptless coin) via the chain-B redeem.
+                    bid.withdraw_to_addr = payout_address
 
                 if route_id and route_established is False:
                     msg_buf = self.getADSBidIntentMessage(bid, offer)
@@ -8412,11 +8411,14 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             elif state == BidStates.XMR_SWAP_NOSCRIPT_TX_REDEEMED:
                 txid_hex = bid.xmr_b_lock_tx.spend_txid.hex()
 
-                custom_payout = self.getCustomPayoutAddress(ci_to, cursor)
+                # The redeem went to an external address (a reverse bidder's
+                # chosen address, or an operator per-coin address) when either is
+                # set; the wallet can't see it, so confirm the spend on-chain.
+                if reverse_bid and bid.withdraw_to_addr:
+                    custom_payout = bid.withdraw_to_addr
+                else:
+                    custom_payout = self.getCustomPayoutAddress(ci_to, cursor)
                 if custom_payout and hasattr(ci_to, "findTxnByHashInChain"):
-                    # Redeem was swept to an external address this wallet does
-                    # not control, so confirm the spend tx on-chain instead of
-                    # looking for an incoming transfer. See getCustomPayoutAddress.
                     found_tx = ci_to.findTxnByHashInChain(txid_hex)
                 else:
                     found_tx = ci_to.findTxnByHash(txid_hex)
@@ -12253,9 +12255,14 @@ class BasicSwap(BaseApp, BSXNetwork, UIApp):
             )
             vkbs = ci_to.sumKeys(kbsl, kbsf)
 
-            # Prefer an operator-configured external payout address, otherwise
-            # redeem to this wallet.
-            address_to = self.getCustomPayoutAddress(ci_to, cursor)
+            # The leader receives coin_to here. For a reverse bid the leader is
+            # the bidder, so honour the external address they chose at bid time;
+            # otherwise prefer an operator-configured per-coin address, else the
+            # wallet.
+            if reverse_bid and bid.withdraw_to_addr:
+                address_to = bid.withdraw_to_addr
+            else:
+                address_to = self.getCustomPayoutAddress(ci_to, cursor)
             if address_to is None:
                 if coin_to in (Coins.XMR, Coins.WOW):
                     address_to = self.getCachedMainWalletAddress(ci_to, cursor)

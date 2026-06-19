@@ -2331,35 +2331,82 @@ class BasicSwapTest(TestFunctions):
             err is not None and "payout" in err.lower()
         ), f"postXmrBid must reject an invalid payout address, got: {err}"
 
-    def test_01_i_reverse_payout_rejected(self):
-        # A payout address on a reverse-ADS bid must be rejected (not silently
-        # ignored): the dest_af wiring only covers the non-reverse path.
+    def test_01_i_reverse_full_swap_bidder_payout(self):
+        # Reverse bid (offer sells the scriptless coin): the bidder is the leader
+        # and receives coin_from via the chain-B redeem. Verify a bid-supplied
+        # external address is honoured and the swap completes (confirmed
+        # on-chain, since the receiving wallet can't see an external sweep).
         if not self.has_segwit:
             return
+
+        id_offerer: int = self.node_a_id
+        id_bidder: int = self.node_b_id
+        id_external: int = self.node_c_id
+
         swap_clients = self.swap_clients
-        self.prepare_balance(Coins.XMR, 100.0, 1800 + self.node_a_id, 1801)
-        ci_from = swap_clients[self.node_a_id].ci(Coins.XMR)
-        ci_to = swap_clients[self.node_b_id].ci(self.test_coin_from)
-        amt = ci_from.make_int(1)
-        rate = ci_to.make_int(1)
-        offer_id = swap_clients[self.node_a_id].postOffer(
-            Coins.XMR, self.test_coin_from, amt, rate, amt, SwapTypes.XMR_SWAP
+        coin_from = Coins.XMR  # reverse: the offer sells XMR
+        coin_to = self.test_coin_from
+        assert swap_clients[0].is_reverse_ads_bid(coin_from, coin_to)
+        ci_from = swap_clients[id_offerer].ci(coin_from)
+        ci_to = swap_clients[id_bidder].ci(coin_to)
+
+        self.prepare_balance(coin_from, 100.0, 1800 + id_offerer, 1801)
+
+        external_address: str = (
+            swap_clients[id_external].ci(coin_from).getMainWalletAddress()
         )
-        wait_for_offer(test_delay_event, swap_clients[self.node_b_id], offer_id)
-        external = (
-            swap_clients[self.node_b_id].ci(self.test_coin_from).getNewAddress(True)
+        external_from_before: float = self.getBalance(
+            read_json_api(1800 + id_external, "wallets"), coin_from
         )
 
-        err = None
-        try:
-            swap_clients[self.node_b_id].postXmrBid(
-                offer_id, amt, extra_options={"payout_address": external}
-            )
-        except Exception as e:
-            err = str(e)
-        assert (
-            err is not None and "reverse" in err.lower()
-        ), f"postXmrBid must reject a payout address on a reverse bid, got: {err}"
+        amt_swap = ci_from.make_int(random.uniform(0.1, 2.0), r=1)
+        rate_swap = ci_to.make_int(random.uniform(0.2, 20.0), r=1)
+        offer_id = swap_clients[id_offerer].postOffer(
+            coin_from, coin_to, amt_swap, rate_swap, amt_swap, SwapTypes.XMR_SWAP
+        )
+        wait_for_offer(test_delay_event, swap_clients[id_bidder], offer_id)
+        offer = swap_clients[id_bidder].listOffers(filters={"offer_id": offer_id})[0]
+
+        bid_id = swap_clients[id_bidder].postXmrBid(
+            offer_id,
+            offer.amount_from,
+            extra_options={"payout_address": external_address},
+        )
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.BID_RECEIVED,
+            wait_for=(self.extra_wait_time + 40),
+        )
+
+        swap_clients[id_offerer].acceptBid(bid_id)
+
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_offerer],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            wait_for=(self.extra_wait_time + 180),
+        )
+        wait_for_bid(
+            test_delay_event,
+            swap_clients[id_bidder],
+            bid_id,
+            BidStates.SWAP_COMPLETED,
+            sent=True,
+            wait_for=(self.extra_wait_time + 30),
+        )
+
+        amount_from = float(ci_from.format_amount(amt_swap))
+        # The external wallet should receive coin_from (the scriptless coin).
+        wait_for_balance(
+            test_delay_event,
+            f"http://127.0.0.1:{1800 + id_external}/json/wallets/{coin_from.name.lower()}",
+            "balance",
+            external_from_before + amount_from - 0.05,
+            iterations=30,
+        )
 
     def test_02_a_leader_recover_a_lock_tx(self):
         if not self.has_segwit:
