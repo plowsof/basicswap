@@ -596,6 +596,7 @@ def page_offer(self, url_split: List[str], post_string: str) -> bytes:
 
     extend_data = {
         "nb_validmins": 10,
+        "nb_payout_address": "",
     }
     messages = []
     err_messages = []
@@ -679,6 +680,12 @@ def page_offer(self, url_split: List[str], post_string: str) -> bytes:
                     extra_options["prefunded_tx"] = bytes.fromhex(
                         get_data_entry(form_data, "prefunded_bid_tx")
                     )
+
+                if have_data_entry(form_data, "payout_address"):
+                    payout_address = get_data_entry(form_data, "payout_address").strip()
+                    extend_data["nb_payout_address"] = payout_address
+                    if payout_address != "":
+                        extra_options["payout_address"] = payout_address
 
                 sent_bid_id = swap_client.postBid(
                     offer_id,
