@@ -599,6 +599,25 @@ class XMRInterface(CoinInterface):
 
             return None
 
+    def findTxnByHashInChain(self, txid: str):
+        # Confirm a transaction directly via the daemon, independent of which
+        # wallet received the outputs. Used to confirm a redeem that was swept
+        # to an external payout address (which this node's wallet can't see).
+        current_height: int = self.getChainHeight()
+        rv = self.rpc2("get_transactions", {"txs_hashes": [txid]})
+        self._log.info(
+            f"findTxnByHashInChain {self.ticker_str()} current_height {current_height}\nhash: {txid}"
+        )
+        for tx in rv.get("txs", []):
+            if tx.get("in_pool", False):
+                continue
+            block_height = tx.get("block_height")
+            if block_height is None:
+                continue
+            if current_height - block_height > self.blocks_confirmed:
+                return {"txid": txid, "height": block_height}
+        return None
+
     def spendBLockTx(
         self,
         chain_b_lock_txid: bytes,
@@ -825,6 +844,16 @@ class XMRInterface(CoinInterface):
     def isAddressMine(self, address):
         # TODO
         return True
+
+    def isValidAddress(self, address: str) -> bool:
+        try:
+            with self._mx_wallet:
+                self.openWallet(self._wallet_filename)
+                rv = self.rpc_wallet("validate_address", {"address": address})
+            return rv.get("valid", False) is True
+        except Exception as e:  # noqa: F841
+            self._log.debug(f"validate_address failed: {address}")
+            return False
 
     def ensureFunds(self, amount: int) -> None:
         if self.getSpendableBalance() < amount:
