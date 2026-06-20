@@ -2255,6 +2255,11 @@ class BasicSwapTest(TestFunctions):
             return
         self.do_test_01_full_swap_bidder_payout(self.test_coin_from, Coins.XMR)
 
+    def test_01_j_part_bidder_payout(self):
+        # Same external payout, but the received coin is PART (not BTC): proves
+        # the dest_af path is not BTC-specific.
+        self.do_test_01_full_swap_bidder_payout(Coins.PART, Coins.XMR)
+
     def test_01_g_payout_address_passthrough(self):
         # The operator path: a payout_address set in a coin's chainclients
         # settings must propagate into coin_clients (setCoinConnectParams), which
