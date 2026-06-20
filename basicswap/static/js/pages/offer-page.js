@@ -323,18 +323,28 @@
       const input = document.getElementById('payout_address');
       const feedback = document.getElementById('payout_address_feedback');
       if (!input) return;
+      const coin = input.dataset.coin || 'coin';
       const render = () => {
         const value = input.value.trim();
         const result = AddressValidation.isValidAddressForCoin(input.dataset.coin, value);
-        if (feedback) feedback.classList.add('hidden');
-        input.classList.remove('border-red-500', 'border-green-500');
+        // Inline border colour reliably overrides the Tailwind border classes
+        // (and dark-mode variants) on the input.
+        input.style.borderColor = '';
+        if (feedback) {
+          feedback.classList.add('hidden');
+          feedback.textContent = '';
+        }
         if (value === '' || result === null) return;
-        if (result) {
-          input.classList.add('border-green-500');
-        } else {
-          input.classList.add('border-red-500');
+        if (result === true) {
+          input.style.borderColor = '#22c55e'; // green-500
           if (feedback) {
-            feedback.textContent = 'This does not look like a valid ' + (input.dataset.coin || 'coin') + ' address.';
+            feedback.textContent = '✓ Valid ' + coin + ' address';
+            feedback.className = 'mt-1 text-xs text-green-500';
+          }
+        } else {
+          input.style.borderColor = '#ef4444'; // red-500
+          if (feedback) {
+            feedback.textContent = '✗ Not a valid ' + coin + ' address';
             feedback.className = 'mt-1 text-xs text-red-500';
           }
         }
