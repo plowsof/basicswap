@@ -56,26 +56,71 @@ check("monero coin dispatches to checksum validator", () => {
   assert.strictEqual(A.isValidAddressForCoin("Monero", XMR), true);
   assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
 });
-check("btc-like coin: plausible -> true, implausible -> null (advisory, never blocks)", () => {
+check("sha256 known vectors", () => {
+  const hx = (b) => Buffer.from(b).toString("hex");
+  assert.strictEqual(
+    hx(A.sha256(new Uint8Array([]))),
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  );
+  assert.strictEqual(
+    hx(A.sha256(new TextEncoder().encode("abc"))),
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  );
+});
+check("BTC base58check: valid true, tampered/junk false (authoritative)", () => {
   assert.strictEqual(
     A.isValidAddressForCoin("Bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
     true
   );
-  // Non-authoritative: must NOT report false (would block a valid bid).
-  assert.strictEqual(A.isValidAddressForCoin("Bitcoin", "bad addr!!"), null);
+  assert.strictEqual(
+    A.isValidAddressForCoin("Bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"),
+    false
+  );
+  assert.strictEqual(A.isValidAddressForCoin("Bitcoin", "bad addr!!"), false);
 });
-check("BCH cashaddr is not falsely rejected (advisory null, not false)", () => {
-  // Regression: the heuristic can't parse cashaddr; it must not block the bid.
+check("BTC bech32/bech32m: valid true, tampered false", () => {
+  assert.strictEqual(
+    A.isValidAddressForCoin("Bitcoin", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+    true
+  );
+  assert.strictEqual(
+    A.isValidAddressForCoin(
+      "Bitcoin",
+      "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
+    ),
+    true
+  );
+  assert.strictEqual(
+    A.isValidAddressForCoin("Bitcoin", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5"),
+    false
+  );
+});
+check("BCH cashaddr: valid (prefixed and bare) true, tampered false", () => {
   assert.strictEqual(
     A.isValidAddressForCoin(
       "Bitcoin Cash",
       "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
     ),
-    null
+    true
+  );
+  assert.strictEqual(
+    A.isValidAddressForCoin(
+      "Bitcoin Cash",
+      "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+    ),
+    true
+  );
+  assert.strictEqual(
+    A.isValidAddressForCoin(
+      "Bitcoin Cash",
+      "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"
+    ),
+    false
   );
 });
-check("monero invalid is still authoritative false (blocks)", () => {
+check("monero invalid is authoritative false; Decred is advisory null", () => {
   assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
+  assert.strictEqual(A.isValidAddressForCoin("Decred", "Dsunvalidatedoffline"), null);
 });
 
 console.log("\n" + passed + " passed");

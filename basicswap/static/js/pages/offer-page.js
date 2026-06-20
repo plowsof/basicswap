@@ -1,10 +1,11 @@
 (function() {
   'use strict';
 
-  // --- Payout address validation (advisory UX only; postBid validates
-  // authoritatively server-side via CoinInterface.isValidAddress). Monero /
-  // Wownero get a full Base58 + Keccak-256 checksum check, other coins a
-  // lightweight format check to catch typos. ---
+  // --- Payout address validation (UX feedback; postBid still validates
+  // authoritatively server-side via CoinInterface.isValidAddress). Each coin is
+  // checked with a real checksum: Monero/Wownero Base58 + Keccak-256, Bitcoin
+  // Cash CashAddr, and Base58Check (sha256d) / Bech32(m) for the rest. Coins
+  // with a non-standard checksum (e.g. Decred) return null (advisory only). ---
   const AddressValidation = (function() {
     const RC = [
       0x00000001, 0x00000000, 0x00008082, 0x00000000, 0x0000808a, 0x80000000,
@@ -134,29 +135,159 @@
       return true;
     }
 
-    const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
-    const BECH32_RE = /^[a-z0-9]+$/;
-    function isPlausibleBtcLikeAddress(address) {
-      if (/^(bc1|tb1|bcrt1|ltc1|rltc1|tltc1|pw1|tpw1|rtpw1)[0-9a-z]{6,}$/i.test(address)) {
-        return BECH32_RE.test(address.toLowerCase());
+    // --- SHA-256 (for Base58Check sha256d checksum) ---
+    const K256 = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    function sha256(msg) {
+      const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+      const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+      const l = msg.length;
+      const withOne = new Uint8Array((((l + 8) >> 6) + 1) * 64);
+      withOne.set(msg);
+      withOne[l] = 0x80;
+      const bits = l * 8;
+      const dv = new DataView(withOne.buffer);
+      dv.setUint32(withOne.length - 4, bits >>> 0, false);
+      dv.setUint32(withOne.length - 8, Math.floor(bits / 0x100000000), false);
+      const w = new Uint32Array(64);
+      for (let off = 0; off < withOne.length; off += 64) {
+        for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+        for (let i = 16; i < 64; i++) {
+          const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+          const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+          w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+        }
+        let [a, b, c, d, e, f, g, hh] = h;
+        for (let i = 0; i < 64; i++) {
+          const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+          const ch = (e & f) ^ (~e & g);
+          const t1 = (hh + S1 + ch + K256[i] + w[i]) >>> 0;
+          const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+          const maj = (a & b) ^ (a & c) ^ (b & c);
+          const t2 = (S0 + maj) >>> 0;
+          hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
       }
-      return address.length >= 26 && address.length <= 90 && BASE58_RE.test(address);
+      const out = new Uint8Array(32);
+      for (let i = 0; i < 8; i++) new DataView(out.buffer).setUint32(i * 4, h[i], false);
+      return out;
+    }
+
+    // --- Base58Check (legacy P2PKH/P2SH for BTC/PART/LTC/DOGE/DASH/...) ---
+    const STD_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    function base58Decode(str) {
+      let num = 0n;
+      for (const ch of str) {
+        const d = STD_B58.indexOf(ch);
+        if (d < 0) return null;
+        num = num * 58n + BigInt(d);
+      }
+      const bytes = [];
+      while (num > 0n) { bytes.unshift(Number(num & 0xffn)); num >>= 8n; }
+      for (let i = 0; i < str.length && str[i] === "1"; i++) bytes.unshift(0);
+      return new Uint8Array(bytes);
+    }
+    function isBase58Check(address) {
+      const data = base58Decode(address);
+      if (!data || data.length < 5) return false;
+      const payload = data.slice(0, -4);
+      const checksum = data.slice(-4);
+      const h = sha256(sha256(payload));
+      for (let i = 0; i < 4; i++) if (h[i] !== checksum[i]) return false;
+      return true;
+    }
+
+    // --- Bech32 / Bech32m (segwit: BTC bc1, LTC ltc1, PART pw1, ...) ---
+    const BECH32_CHARS = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    function bech32Polymod(values) {
+      const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+      let chk = 1;
+      for (const v of values) {
+        const top = chk >>> 25;
+        chk = ((chk & 0x1ffffff) << 5) ^ v;
+        for (let i = 0; i < 5; i++) if ((top >>> i) & 1) chk ^= GEN[i];
+      }
+      return chk >>> 0;
+    }
+    function isBech32(address) {
+      const lower = address.toLowerCase();
+      if (address !== lower && address !== address.toUpperCase()) return false; // mixed case
+      const pos = lower.lastIndexOf("1");
+      if (pos < 1 || pos + 7 > lower.length || lower.length > 90) return false;
+      const hrp = lower.slice(0, pos);
+      const data = [];
+      for (const ch of lower.slice(pos + 1)) {
+        const d = BECH32_CHARS.indexOf(ch);
+        if (d < 0) return false;
+        data.push(d);
+      }
+      const expanded = [];
+      for (const ch of hrp) expanded.push(ch.charCodeAt(0) >> 5);
+      expanded.push(0);
+      for (const ch of hrp) expanded.push(ch.charCodeAt(0) & 31);
+      const chk = bech32Polymod(expanded.concat(data));
+      return chk === 1 || chk === 0x2bc830a3; // bech32 or bech32m
+    }
+
+    // --- CashAddr (Bitcoin Cash) ---
+    function cashaddrPolymod(values) {
+      const GEN = [0x98f2bc8e61n, 0x79b76d99e2n, 0xf33e5fb3c4n, 0xae2eabe2a8n, 0x1e4f43e470n];
+      let chk = 1n;
+      for (const v of values) {
+        const top = chk >> 35n;
+        chk = ((chk & 0x07ffffffffn) << 5n) ^ BigInt(v);
+        for (let i = 0; i < 5; i++) if ((top >> BigInt(i)) & 1n) chk ^= GEN[i];
+      }
+      return chk ^ 1n;
+    }
+    function isCashaddr(address) {
+      let lower = address.toLowerCase();
+      let prefix = "bitcoincash";
+      const colon = lower.indexOf(":");
+      if (colon >= 0) { prefix = lower.slice(0, colon); lower = lower.slice(colon + 1); }
+      const data = [];
+      for (const ch of lower) {
+        const d = BECH32_CHARS.indexOf(ch);
+        if (d < 0) return false;
+        data.push(d);
+      }
+      const expanded = [];
+      for (const ch of prefix) expanded.push(ch.charCodeAt(0) & 31);
+      expanded.push(0);
+      return cashaddrPolymod(expanded.concat(data)) === 0n;
     }
 
     function isValidAddressForCoin(coin, address) {
       // Returns true (valid), false (definitely invalid — authoritative), or
-      // null (can't tell, don't block; the server validates on submit).
+      // null (no validator for this coin; don't block, the server validates).
       if (!address) return null; // empty allowed (optional field)
       const c = String(coin || "").toLowerCase();
-      // Monero/Wownero have a full checksum check, so false here is reliable.
-      if (c.indexOf("monero") !== -1 || c.indexOf("wownero") !== -1) return isValidMoneroAddress(address);
-      // Other coins use a heuristic that can't recognise every valid format
-      // (e.g. BCH cashaddr, unlisted bech32 HRPs). Never report those invalid
-      // or block the bid on them — only surface a positive hint.
-      return isPlausibleBtcLikeAddress(address) ? true : null;
+      if (c.indexOf("monero") !== -1 || c.indexOf("wownero") !== -1) {
+        return isValidMoneroAddress(address);
+      }
+      if (c.indexOf("cash") !== -1) {
+        // BCH: cashaddr (with or without prefix) or a legacy base58check address.
+        return isCashaddr(address) || isBase58Check(address);
+      }
+      if (c.indexOf("decred") !== -1) {
+        return null; // Decred uses a blake256 checksum; no offline validator here.
+      }
+      // BTC / Particl / Litecoin / Dogecoin / Dash / Firo / Namecoin / ...:
+      // a legacy base58check address or a bech32/bech32m (segwit) address.
+      return isBase58Check(address) || isBech32(address);
     }
 
-    return { isValidAddressForCoin, isValidMoneroAddress, keccak256 };
+    return { isValidAddressForCoin, isValidMoneroAddress, isBase58Check, isBech32, isCashaddr, keccak256, sha256 };
   })();
 
   // Exported for node-based unit testing (tests/basicswap/test_address_validation.js).
