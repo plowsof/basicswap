@@ -197,14 +197,16 @@
       for (let i = 0; i < str.length && str[i] === "1"; i++) bytes.unshift(0);
       return new Uint8Array(bytes);
     }
-    function isBase58Check(address) {
+    function base58CheckVersion(address) {
+      // Returns the leading version byte when the sha256d checksum is valid,
+      // else -1. The caller checks the version against the coin's prefixes.
       const data = base58Decode(address);
-      if (!data || data.length < 5) return false;
+      if (!data || data.length < 5) return -1;
       const payload = data.slice(0, -4);
       const checksum = data.slice(-4);
       const h = sha256(sha256(payload));
-      for (let i = 0; i < 4; i++) if (h[i] !== checksum[i]) return false;
-      return true;
+      for (let i = 0; i < 4; i++) if (h[i] !== checksum[i]) return -1;
+      return data[0];
     }
 
     // --- Bech32 / Bech32m (segwit: BTC bc1, LTC ltc1, PART pw1, ...) ---
@@ -219,16 +221,18 @@
       }
       return chk >>> 0;
     }
-    function isBech32(address) {
+    function bech32Hrp(address) {
+      // Returns the human-readable prefix when the bech32/bech32m checksum is
+      // valid, else null. The caller checks the hrp against the coin's hrp.
       const lower = address.toLowerCase();
-      if (address !== lower && address !== address.toUpperCase()) return false; // mixed case
+      if (address !== lower && address !== address.toUpperCase()) return null; // mixed case
       const pos = lower.lastIndexOf("1");
-      if (pos < 1 || pos + 7 > lower.length || lower.length > 90) return false;
+      if (pos < 1 || pos + 7 > lower.length || lower.length > 90) return null;
       const hrp = lower.slice(0, pos);
       const data = [];
       for (const ch of lower.slice(pos + 1)) {
         const d = BECH32_CHARS.indexOf(ch);
-        if (d < 0) return false;
+        if (d < 0) return null;
         data.push(d);
       }
       const expanded = [];
@@ -236,7 +240,7 @@
       expanded.push(0);
       for (const ch of hrp) expanded.push(ch.charCodeAt(0) & 31);
       const chk = bech32Polymod(expanded.concat(data));
-      return chk === 1 || chk === 0x2bc830a3; // bech32 or bech32m
+      return (chk === 1 || chk === 0x2bc830a3) ? hrp : null; // bech32 or bech32m
     }
 
     // --- CashAddr (Bitcoin Cash) ---
@@ -250,11 +254,15 @@
       }
       return chk ^ 1n;
     }
-    function isCashaddr(address) {
+    function isCashaddr(address, expectedPrefix) {
       let lower = address.toLowerCase();
-      let prefix = "bitcoincash";
+      let prefix = expectedPrefix || "bitcoincash";
       const colon = lower.indexOf(":");
-      if (colon >= 0) { prefix = lower.slice(0, colon); lower = lower.slice(colon + 1); }
+      if (colon >= 0) {
+        if (expectedPrefix && lower.slice(0, colon) !== expectedPrefix) return false;
+        prefix = lower.slice(0, colon);
+        lower = lower.slice(colon + 1);
+      }
       const data = [];
       for (const ch of lower) {
         const d = BECH32_CHARS.indexOf(ch);
@@ -267,27 +275,31 @@
       return cashaddrPolymod(expanded.concat(data)) === 0n;
     }
 
-    function isValidAddressForCoin(coin, address) {
-      // Returns true (valid), false (definitely invalid — authoritative), or
-      // null (no validator for this coin; don't block, the server validates).
+    function isValidAddressForSpec(spec, address) {
+      // spec describes the coin's address format for the active network (built
+      // from chainparams.py). Returns true (valid for this coin), false
+      // (well-formed but wrong coin / bad checksum), or null (no spec, advisory
+      // only — the server still validates).
       if (!address) return null; // empty allowed (optional field)
-      const c = String(coin || "").toLowerCase();
-      if (c.indexOf("monero") !== -1 || c.indexOf("wownero") !== -1) {
-        return isValidMoneroAddress(address);
+      if (!spec || !spec.type) return null;
+      if (spec.type === "monero") return isValidMoneroAddress(address);
+      const b58 = spec.b58 || [];
+      const matchesB58 = () => {
+        const v = base58CheckVersion(address);
+        return v !== -1 && b58.indexOf(v) !== -1;
+      };
+      if (spec.type === "cashaddr") {
+        return isCashaddr(address, spec.prefix) || matchesB58();
       }
-      if (c.indexOf("cash") !== -1) {
-        // BCH: cashaddr (with or without prefix) or a legacy base58check address.
-        return isCashaddr(address) || isBase58Check(address);
-      }
-      if (c.indexOf("decred") !== -1) {
-        return null; // Decred uses a blake256 checksum; no offline validator here.
-      }
-      // BTC / Particl / Litecoin / Dogecoin / Dash / Firo / Namecoin / ...:
-      // a legacy base58check address or a bech32/bech32m (segwit) address.
-      return isBase58Check(address) || isBech32(address);
+      // base58: a legacy address whose version byte matches one of the coin's
+      // prefixes, or a bech32/bech32m address whose hrp matches the coin's hrp.
+      const v = base58CheckVersion(address);
+      if (v !== -1) return b58.indexOf(v) !== -1;
+      if (spec.hrp) return bech32Hrp(address) === spec.hrp;
+      return false;
     }
 
-    return { isValidAddressForCoin, isValidMoneroAddress, isBase58Check, isBech32, isCashaddr, keccak256, sha256 };
+    return { isValidAddressForSpec, isValidMoneroAddress, base58CheckVersion, bech32Hrp, isCashaddr, keccak256, sha256 };
   })();
 
   // Exported for node-based unit testing (tests/basicswap/test_address_validation.js).
@@ -309,13 +321,24 @@
       this.setupPayoutValidation();
     },
 
+    payoutAddressSpec: function(input) {
+      try {
+        return JSON.parse(input.dataset.addrSpec || "null");
+      } catch (e) {
+        return null;
+      }
+    },
+
     payoutAddressValid: function() {
       // Returns true when the optional payout address is empty or valid.
       const input = document.getElementById('payout_address');
       if (!input) return true;
       const value = input.value.trim();
       if (value === '') return true;
-      const result = AddressValidation.isValidAddressForCoin(input.dataset.coin, value);
+      const result = AddressValidation.isValidAddressForSpec(
+        this.payoutAddressSpec(input),
+        value
+      );
       return result !== false;
     },
 
@@ -324,9 +347,10 @@
       const feedback = document.getElementById('payout_address_feedback');
       if (!input) return;
       const coin = input.dataset.coin || 'coin';
+      const spec = this.payoutAddressSpec(input);
       const render = () => {
         const value = input.value.trim();
-        const result = AddressValidation.isValidAddressForCoin(input.dataset.coin, value);
+        const result = AddressValidation.isValidAddressForSpec(spec, value);
         // Inline border colour reliably overrides the Tailwind border classes
         // (and dark-mode variants) on the input.
         input.style.borderColor = '';

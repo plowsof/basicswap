@@ -48,79 +48,69 @@ check("monero address with invalid base58 char fails", () => {
   assert.strictEqual(A.isValidMoneroAddress(XMR.slice(0, -1) + "0"), false);
 });
 
-// isValidAddressForCoin dispatch + optional-empty handling.
-check("empty address returns null (optional field)", () => {
-  assert.strictEqual(A.isValidAddressForCoin("Monero", ""), null);
-});
-check("monero coin dispatches to checksum validator", () => {
-  assert.strictEqual(A.isValidAddressForCoin("Monero", XMR), true);
-  assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
-});
+// Address specs as the server builds them from chainparams.py (per network).
+const BTC = { type: "base58", b58: [0, 5], hrp: "bc" }; // mainnet
+const PART = { type: "base58", b58: [56, 60, 20], hrp: "pw" }; // mainnet
+const PART_RT = { type: "base58", b58: [118, 122, 21], hrp: "rtpw" }; // regtest
+const BCH = { type: "cashaddr", prefix: "bitcoincash", b58: [0, 5] };
+const XMR_SPEC = { type: "monero" };
+
 check("sha256 known vectors", () => {
-  const hx = (b) => Buffer.from(b).toString("hex");
   assert.strictEqual(
-    hx(A.sha256(new Uint8Array([]))),
+    hex(A.sha256(new Uint8Array([]))),
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   );
   assert.strictEqual(
-    hx(A.sha256(new TextEncoder().encode("abc"))),
+    hex(A.sha256(new TextEncoder().encode("abc"))),
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
   );
 });
-check("BTC base58check: valid true, tampered/junk false (authoritative)", () => {
-  assert.strictEqual(
-    A.isValidAddressForCoin("Bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
-    true
-  );
-  assert.strictEqual(
-    A.isValidAddressForCoin("Bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"),
-    false
-  );
-  assert.strictEqual(A.isValidAddressForCoin("Bitcoin", "bad addr!!"), false);
+
+// The regression: a checksum-valid address of the WRONG coin must be rejected.
+// Before per-coin prefixes, this returned true (a BTC address "validated" as
+// Particl). The version byte / hrp check now catches it.
+check("REGRESSION: a Bitcoin address is rejected in a Particl field", () => {
+  const btc = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+  assert.strictEqual(A.isValidAddressForSpec(BTC, btc), true);
+  assert.strictEqual(A.isValidAddressForSpec(PART, btc), false);
+  // bech32 too: a bc1 address must not pass for a pw-prefixed coin.
+  const btcSeg = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+  assert.strictEqual(A.isValidAddressForSpec(BTC, btcSeg), true);
+  assert.strictEqual(A.isValidAddressForSpec(PART, btcSeg), false);
 });
-check("BTC bech32/bech32m: valid true, tampered false", () => {
+check("a Particl address is rejected in a Bitcoin field", () => {
+  const part = "pX9N6S76ZtA5BfsiJmqBbjaEgLMHpt58it"; // regtest, version 0x76
+  assert.strictEqual(A.isValidAddressForSpec(PART_RT, part), true);
+  assert.strictEqual(A.isValidAddressForSpec(BTC, part), false);
+});
+check("BTC base58check + bech32m valid; tampered/junk false", () => {
+  assert.strictEqual(A.isValidAddressForSpec(BTC, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), true);
+  assert.strictEqual(A.isValidAddressForSpec(BTC, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"), false);
+  assert.strictEqual(A.isValidAddressForSpec(BTC, "bad addr!!"), false);
   assert.strictEqual(
-    A.isValidAddressForCoin("Bitcoin", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+    A.isValidAddressForSpec(BTC, "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"),
     true
-  );
-  assert.strictEqual(
-    A.isValidAddressForCoin(
-      "Bitcoin",
-      "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
-    ),
-    true
-  );
-  assert.strictEqual(
-    A.isValidAddressForCoin("Bitcoin", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5"),
-    false
   );
 });
-check("BCH cashaddr: valid (prefixed and bare) true, tampered false", () => {
+check("BCH cashaddr (prefixed and bare) valid; cross-coin/tampered false", () => {
   assert.strictEqual(
-    A.isValidAddressForCoin(
-      "Bitcoin Cash",
-      "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
-    ),
+    A.isValidAddressForSpec(BCH, "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"),
     true
   );
   assert.strictEqual(
-    A.isValidAddressForCoin(
-      "Bitcoin Cash",
-      "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
-    ),
+    A.isValidAddressForSpec(BCH, "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"),
     true
   );
   assert.strictEqual(
-    A.isValidAddressForCoin(
-      "Bitcoin Cash",
-      "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"
-    ),
+    A.isValidAddressForSpec(BCH, "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"),
     false
   );
 });
-check("monero invalid is authoritative false; Decred is advisory null", () => {
-  assert.strictEqual(A.isValidAddressForCoin("Monero", "notanaddress"), false);
-  assert.strictEqual(A.isValidAddressForCoin("Decred", "Dsunvalidatedoffline"), null);
+check("Monero spec: valid true, invalid false; empty/no-spec advisory null", () => {
+  assert.strictEqual(A.isValidAddressForSpec(XMR_SPEC, XMR), true);
+  assert.strictEqual(A.isValidAddressForSpec(XMR_SPEC, "notanaddress"), false);
+  assert.strictEqual(A.isValidAddressForSpec(XMR_SPEC, ""), null); // empty optional
+  assert.strictEqual(A.isValidAddressForSpec({}, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), null); // no validator -> advisory
 });
 
 console.log("\n" + passed + " passed");

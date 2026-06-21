@@ -5,6 +5,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file LICENSE or http://www.opensource.org/licenses/mit-license.php.
 
+import json
 import traceback
 import time
 
@@ -45,6 +46,36 @@ from basicswap.chainparams import (
     ticker_map,
 )
 from basicswap.explorers import default_coingecko_api_key
+
+
+def get_payout_address_spec(ci):
+    # Address-format spec (from chainparams, for the active network) used by the
+    # client to validate a payout address against THIS coin's prefixes, so e.g.
+    # a Bitcoin address is not accepted in a Particl field.
+    try:
+        net = ci.chainparams_network()
+    except Exception:
+        return {}
+    if "address_prefix" in net:  # Monero / Wownero
+        return {"type": "monero"}
+    if "decred" in ci.coin_name().lower():
+        return {}  # blake256 checksum: no offline validator, advisory only
+    versions = [
+        net[k]
+        for k in (
+            "pubkey_address",
+            "script_address",
+            "script_address2",
+            "stealth_key_prefix",
+        )
+        if net.get(k) is not None and net[k] < 256
+    ]
+    if "cash" in ci.coin_name().lower():  # Bitcoin Cash (CashAddr + legacy)
+        return {"type": "cashaddr", "prefix": net.get("hrp", ""), "b58": versions}
+    spec = {"type": "base58", "b58": versions}
+    if net.get("hrp"):
+        spec["hrp"] = net["hrp"]
+    return spec
 
 
 def value_or_none(v):
@@ -609,6 +640,10 @@ def page_offer(self, url_split: List[str], post_string: str) -> bytes:
 
     ci_from = swap_client.ci(Coins(offer.coin_from))
     ci_to = swap_client.ci(Coins(offer.coin_to))
+
+    # The bidder receives coin_from; pass its address-format spec so the payout
+    # field validates against this coin's prefixes client-side.
+    extend_data["nb_payout_spec"] = json.dumps(get_payout_address_spec(ci_from))
 
     reverse_bid: bool = True if offer.bid_reversed else False
 
